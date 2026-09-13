@@ -99,6 +99,14 @@
   - [~] **⑤ 任务栏点中/英反同步**（★☆☆ / 低 / 0.5 天）：**代码完成，待真机测**（2026-09-11）。
     激活时对转换模式 compartment 挂 `ITfCompartmentEventSink`（`com/conversion.rs`），`OnChange` 读回 `NATIVE` 位、与当前模式不同才翻转
     （防回环），顺带刷指示器 + 上报 Server 让悬浮状态条也同步。纯 DLL 改动、无新协议。
+  - [~] **⑥ 朗读译文 `speak_translation`**（★☆☆ / 中 / Windows 侧 2026-09-13 完成待真机测，mac 侧待接）：
+    快捷键登记第二个 TSF 保留键（`com/key/preserved.rs` 泛化 GUID）→ Server 取「最近上屏语句」（壳侧滚动缓冲
+    `dispatch/speak.rs::note_committed`，私密输入不记；Core 加 `last_sentence` 纯函数 + `translation_target` 导出）→
+    `request_translation`（双向）→ SAPI 专用线程（`tts.rs`：`SPF_ASYNC` 起播、`GetStatus` 的 `SPRS_IS_SPEAKING` 位轮询完成、
+    `SPF_PURGEBEFORESPEAK` 打断重读；音色按目标语言 `Language=<LCID>` 属性枚举，缺语音包回执提示）→ 候选窗单候选帧提示
+    （「正在翻译…」→ 译文，摆 `last_caret` 新增的从不清光标位），回执 `Work::Speech` 收窗。配置加 `[shortcut] speak_translation`
+    （Ctrl+Alt+R，与 translate_selection 撞键时退缺省），设置「快捷键」页加朗读译文行。mac 侧留接口：同 Core 函数 +
+    配置字段已就绪，待接 IMK 快捷键分支与 AVSpeechSynthesizer Speaker。
   - [ ] 发版：换 **Certum 开源代码签名证书**重签（开发全程自签 + 本机受信任根，见 `installer/sign-local.ps1`）、
     `windows-v<版本>` 标签与 CI。
   - [ ] **本地整句模型上 Windows**：Server 已接（`dispatch/rescore/`，CPU 推理，设置「云服务」页有开关，安装包带 `data\model`），待真机验：每次重排的耗时（前文 + 几条路径一次前向，CPU 上可能几十到一百多毫秒，超了就缩前文长度）、模型加载时间；

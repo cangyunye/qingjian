@@ -21,12 +21,26 @@ impl ITfTextInputProcessor_Impl for TextService_Impl {
         let sink: ITfKeyEventSink = self.to_interface();
         unsafe { keystroke.AdviseKeyEventSink(tid, &sink, true)? };
         let combo = preserved::load_combo();
-        match preserved::register(&keystroke, tid, combo) {
+        match preserved::register(
+            &keystroke,
+            tid,
+            &preserved::GUID_TRANSLATE,
+            combo,
+            "翻译选中文字",
+        ) {
             Ok(()) => {
                 self.translate_combo.set(Some(combo));
                 log(&format!("翻译选中文字快捷键已登记为保留键: {combo}"));
             }
             Err(error) => log(&format!("登记翻译快捷键失败: {error}")),
+        }
+        let speak = preserved::load_speak_combo();
+        match preserved::register(&keystroke, tid, &preserved::GUID_SPEAK, speak, "朗读译文") {
+            Ok(()) => {
+                self.speak_combo.set(Some(speak));
+                log(&format!("朗读译文快捷键已登记为保留键: {speak}"));
+            }
+            Err(error) => log(&format!("登记朗读快捷键失败: {error}")),
         }
 
         self.client_id.set(tid);
@@ -66,7 +80,10 @@ impl ITfTextInputProcessor_Impl for TextService_Impl {
             && let Ok(keystroke) = thread_mgr.cast::<ITfKeystrokeMgr>()
         {
             if let Some(combo) = self.translate_combo.take() {
-                preserved::unregister(&keystroke, combo);
+                preserved::unregister(&keystroke, &preserved::GUID_TRANSLATE, combo);
+            }
+            if let Some(combo) = self.speak_combo.take() {
+                preserved::unregister(&keystroke, &preserved::GUID_SPEAK, combo);
             }
             let _ = unsafe { keystroke.UnadviseKeyEventSink(self.client_id.get()) };
         }

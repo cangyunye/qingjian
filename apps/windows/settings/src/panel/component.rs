@@ -124,6 +124,11 @@ impl Component for Settings {
                 let combo = format!("{}+{key}", shortcut::MODIFIERS[i].1);
                 self.save("shortcut", "translate_selection", combo);
             }
+            Message::SpeakTranslation(Some(i)) if i < shortcut::MODIFIERS.len() => {
+                let key = self.config.shortcut.speak_translation.key;
+                let combo = format!("{}+{key}", shortcut::MODIFIERS[i].1);
+                self.save("shortcut", "speak_translation", combo);
+            }
 
             // 模糊音页
             Message::Fuzzy(key, on) => self.save("fuzzy", key, on),

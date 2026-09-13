@@ -1,7 +1,7 @@
 //! 协议分派：把 DLL 发来的 [`ClientMessage`] 交给 Engine，产出回给 DLL 的 [`ServerMessage`]。
 //! 消息分派在 [`message`]，会话在 [`session`]，组句展示状态在 [`composed`]，按键在 [`key`]，
-//! 候选窗口输出在 [`candidates`]，状态条在 [`status`]，翻译选中文字在 [`translate`]，配置热加载在 [`reload`]，
-//! 本地整句模型在 [`rescore`]。
+//! 候选窗口输出在 [`candidates`]，状态条在 [`status`]，翻译选中文字在 [`translate`]，朗读译文在 [`speak`]，
+//! 配置热加载在 [`reload`]，本地整句模型在 [`rescore`]。
 
 mod candidates;
 mod composed;
@@ -11,11 +11,13 @@ mod message;
 mod reload;
 mod rescore;
 mod session;
+mod speak;
 mod status;
 mod translate;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
 
 use qingjian_core::Engine;
@@ -30,6 +32,8 @@ pub use self::reload::attach_cloud;
 pub use self::rescore::find_model;
 use self::rescore::{ModelLoader, RescoreState};
 use self::session::SessionInfo;
+use self::speak::SpeakJob;
+pub use self::speak::{SpeechCommand, SpeechNotice};
 pub use self::status::{NoopStatusSink, StatusEvent, StatusSink, StatusView};
 use self::translate::Translation;
 
@@ -55,6 +59,15 @@ pub struct Router {
 
     /// 「翻译选中文字」进行态；与 `composed` 互斥。
     translation: Option<Translation>,
+
+    /// 「朗读译文」进行态；与 `composed` / `translation` 互斥。
+    speak: Option<SpeakJob>,
+
+    /// TTS 线程的命令端；非 Windows 构建（测试）不设。
+    speech: Option<Sender<SpeechCommand>>,
+
+    /// 最近上屏的文本拼接（「朗读译文」的素材）；私密输入不记，容量见 [`speak`]。
+    committed: String,
 
     /// 已发出、等 DLL 回选区的请求号；对不上的 `Selection` 丢弃。
     pending_selection: Option<u64>,
@@ -96,6 +109,9 @@ pub struct Router {
     /// 聚焦会话最近报来的光标矩形；云联想异步到达时按它原地重摆候选窗口。
     last_rect: Option<ScreenRect>,
 
+    /// 最近一次上报的光标位置，收窗也不清：「朗读译文」的帧按它摆（上屏文本的落点）。
+    last_caret: Option<ScreenRect>,
+
     /// 上次真正显示的帧与位置：没变就不重画（组字期间的空转 Poll 很多）。
     last_shown: Option<(Frame, ScreenRect)>,
 
@@ -124,6 +140,9 @@ impl Router {
             focused: None,
             composed: None,
             translation: None,
+            speak: None,
+            speech: None,
+            committed: String::new(),
             pending_selection: None,
             selection_seq: 0,
             sentence: None,
@@ -137,6 +156,7 @@ impl Router {
             status_mode: None,
             pending_mode: None,
             last_rect: None,
+            last_caret: None,
             last_shown: None,
             model_path: None,
             model_loader: None,

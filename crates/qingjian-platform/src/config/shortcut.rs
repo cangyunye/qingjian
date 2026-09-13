@@ -21,6 +21,9 @@ pub struct ShortcutConfig {
     /// 把应用里选中的文字译成学习语言（需要云服务开着）。
     pub translate_selection: KeyCombo,
 
+    /// 朗读最近上屏语句的译文（需要云服务开着；译文用系统本地语音读出来）。
+    pub speak_translation: KeyCombo,
+
     /// 数字键配这些修饰键：删掉候选（用户词整个删掉，词库词清掉对它的学习）。
     pub delete_candidate: Modifiers,
 }
@@ -37,12 +40,22 @@ impl Default for ShortcutConfig {
             translation,
             translation_second,
             translate_selection: KeyCombo::TRANSLATE_DEFAULT,
+            speak_translation: KeyCombo::SPEAK_DEFAULT,
             delete_candidate: Modifiers::SHIFT,
         }
     }
 }
 
 impl ShortcutConfig {
+    /// 「朗读译文」的组合键；与「翻译选中文字」撞了就退回缺省，保证两个功能都可用。
+    pub fn speak_keys(&self) -> KeyCombo {
+        if self.speak_translation == self.translate_selection {
+            Self::default().speak_translation
+        } else {
+            self.speak_translation
+        }
+    }
+
     /// 删候选的修饰键；为空或与任一组译词键撞了就退回缺省。
     pub fn delete_keys(&self) -> Modifiers {
         let (first, second) = self.translation_keys();
@@ -80,13 +93,13 @@ mod tests {
         assert_eq!(parsed.mode.expression, 'i');
         assert_eq!(
             parsed.translation_keys(),
-            (Modifiers::OPTION, Modifiers::SHIFT_OPTION)
+            ShortcutConfig::default().translation_keys()
         );
         let same: ShortcutConfig =
             toml::from_str("translation = \"option\"\ntranslation_second = \"option\"\n").unwrap();
         assert_eq!(
             same.translation_keys(),
-            (Modifiers::OPTION, Modifiers::SHIFT_OPTION)
+            ShortcutConfig::default().translation_keys()
         );
         let swapped: ShortcutConfig =
             toml::from_str("translation = \"control+option\"\ntranslation_second = \"option\"\n")
@@ -98,10 +111,25 @@ mod tests {
     fn delete_keys_fall_back_when_clashing_with_translation_keys() {
         let parsed: ShortcutConfig = toml::from_str("").unwrap();
         assert_eq!(parsed.delete_keys(), Modifiers::SHIFT);
-        let clash: ShortcutConfig = toml::from_str("delete_candidate = \"option\"\n").unwrap();
+        // 与当前平台的第一组译词键撞上才退回缺省
+        let first = ShortcutConfig::default().translation_keys().0.key();
+        let clash: ShortcutConfig =
+            toml::from_str(&format!("delete_candidate = \"{first}\"\n")).unwrap();
         assert_eq!(clash.delete_keys(), Modifiers::SHIFT);
         let custom: ShortcutConfig =
-            toml::from_str("delete_candidate = \"control+shift\"\n").unwrap();
+            toml::from_str("delete_candidate = \"control+option\"\n").unwrap();
         assert!(custom.delete_keys().control);
+    }
+
+    #[test]
+    fn speak_keys_parse_and_fall_back_when_clashing_with_translate() {
+        let parsed: ShortcutConfig = toml::from_str("").unwrap();
+        assert_eq!(parsed.speak_keys(), KeyCombo::SPEAK_DEFAULT);
+        let custom: ShortcutConfig =
+            toml::from_str("speak_translation = \"control+option+s\"\n").unwrap();
+        assert_eq!(custom.speak_keys().key, 's');
+        let clash: ShortcutConfig =
+            toml::from_str("speak_translation = \"control+option+t\"\n").unwrap();
+        assert_eq!(clash.speak_keys(), KeyCombo::SPEAK_DEFAULT);
     }
 }

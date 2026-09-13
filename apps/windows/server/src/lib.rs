@@ -4,6 +4,9 @@ pub mod assembly;
 pub mod dispatch;
 pub mod error;
 pub mod ipc;
+/// SAPI 语音合成线程（「朗读译文」）；仅 Windows。
+#[cfg(windows)]
+pub mod tts;
 /// 候选窗口 / 状态条的自绘线程；仅 Windows。
 #[cfg(windows)]
 pub mod ui;

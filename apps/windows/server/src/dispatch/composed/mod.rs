@@ -52,7 +52,7 @@ impl Router {
         self.schedule_rescoring();
     }
 
-    /// 拉一次云联想结果：云端词并进候选布局，整句补全记下；翻译评审时结果是译文。
+    /// 拉一次云联想结果：云端词并进候选布局，整句补全记下；翻译评审时结果是译文，朗读流程时交给 TTS。
     pub(super) fn poll_prediction(&mut self) {
         if !self.engine.prediction_enabled() {
             return;
@@ -60,6 +60,16 @@ impl Router {
         let Some(prediction) = self.engine.poll_prediction() else {
             return;
         };
+        if self.speak.is_some() {
+            match prediction.sentence {
+                Some(text) => self.begin_speaking(text),
+                None => {
+                    tracing::info!("朗读译文：云端没有给出译文");
+                    self.speak_notice_in_place("云端没有给出译文".to_owned());
+                }
+            }
+            return;
+        }
         if self.translation.is_some() {
             match prediction.sentence {
                 Some(text) => {
@@ -141,10 +151,13 @@ impl Router {
         Some(self.engine.commit(&candidate))
     }
 
-    /// 按当前状态生成一帧：翻译评审优先；没在组句给空帧；否则给高亮所在的那一页。
+    /// 按当前状态生成一帧：翻译评审与朗读提示优先；没在组句给空帧；否则给高亮所在的那一页。
     pub(super) fn current_frame(&self) -> Frame {
         if let Some(translation) = &self.translation {
             return self.translation_frame(translation);
+        }
+        if let Some(text) = self.current_speak_text() {
+            return self.speak_frame(&text);
         }
         match &self.composed {
             None => Frame::default(),

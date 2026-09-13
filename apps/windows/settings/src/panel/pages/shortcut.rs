@@ -96,6 +96,14 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
                 context.callback(Message::TranslateSelection),
             ),
         ),
+        field(
+            "朗读译文",
+            "打完一句话按这组键 + 当前字母（缺省 Ctrl+Alt+R），把最近上屏语句的译文用系统语音读出来（本地合成，译文只发给云服务接口）。需要云服务。这里只改修饰键，字母固定用当前的。",
+            modifier_combo(
+                s.speak_translation.modifiers,
+                context.callback(Message::SpeakTranslation),
+            ),
+        ),
     ];
     page("快捷键", StackPanel::new().spacing(16.0).children(rows))
 }

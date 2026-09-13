@@ -60,14 +60,22 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
         Ok(FALSE)
     }
 
-    /// 翻译选中文字的保留键命中：当作按下了那个组合键转发给 Server（绕过 `would_eat`）。
+    /// 保留键命中（翻译选中文字 / 朗读译文）：当作按下了那个组合键转发给 Server（绕过 `would_eat`）。
     fn OnPreservedKey(&self, pic: Ref<ITfContext>, rguid: *const GUID) -> Result<BOOL> {
-        if unsafe { *rguid } != preserved::GUID_TRANSLATE || self.keyboard_disabled(&pic) {
-            return Ok(FALSE);
-        }
-        let Some(combo) = self.translate_combo.get() else {
+        let guid = unsafe { *rguid };
+        let combo = if guid == preserved::GUID_TRANSLATE {
+            self.translate_combo.get()
+        } else if guid == preserved::GUID_SPEAK {
+            self.speak_combo.get()
+        } else {
+            None
+        };
+        let Some(combo) = combo else {
             return Ok(FALSE);
         };
+        if self.keyboard_disabled(&pic) {
+            return Ok(FALSE);
+        }
         let event = preserved::key_event(combo, self.mode_state.english());
         Ok(self.forward_key(pic, event).into())
     }

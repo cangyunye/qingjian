@@ -35,6 +35,8 @@ impl Router {
             return;
         }
         self.last_rect = Some(rect);
+        // 「朗读译文」的帧按它摆：上屏后组句收起、`last_rect` 会被清，这里另存一份从不清的。
+        self.last_caret = Some(rect);
         let frame = self.current_frame();
         self.reconcile_candidates(&frame);
     }

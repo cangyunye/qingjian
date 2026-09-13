@@ -42,7 +42,7 @@ pub use marked::{MarkedKind, MarkedSegment};
 pub use mode_keys::{ModeKeys, QUESTION_PREFIX};
 pub use prediction::{
     CloudWord, NoPredictor, Prediction, PredictionKind, PredictionPolicy, PredictionRequest,
-    Predictor, SurroundingText,
+    Predictor, SurroundingText, translation_target,
 };
 
 pub use query::Query;

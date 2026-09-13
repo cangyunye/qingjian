@@ -34,10 +34,10 @@ pub use engine::{
     NoInputLogger, NoLearner, NoPredictor, NoTranslator, NoUsageMeter, NoVocabularyTracker,
     Prediction, PredictionKind, PredictionPolicy, PredictionRequest, Predictor, QUESTION_PREFIX,
     Query, RESCORE_CONTEXT_CHARS, SurroundingText, Timings, Translator, Usage, UsageMeter,
-    UsageSummary, VocabularySummary, VocabularyTracker, book_scale,
+    UsageSummary, VocabularySummary, VocabularyTracker, book_scale, translation_target,
 };
 pub use fuzzy::FuzzyRules;
-pub use history::InputHistory;
+pub use history::{InputHistory, last_sentence};
 pub use parser::{ParseError, Segmentation};
 pub use punctuation::Punctuation;
 pub use qingjian_dictionary as dictionary;

@@ -69,6 +69,10 @@ impl Router {
             .and_then(|translation| translation.result.clone());
         self.end_translation();
         let (commit, outcome) = if accept {
+            // 接受的译文进了应用文档，也算「经输入法上屏」，记进朗读缓冲
+            if let Some(text) = &result {
+                self.note_committed(text);
+            }
             (result, KeyOutcome::Consumed)
         } else if escape {
             (None, KeyOutcome::Consumed)

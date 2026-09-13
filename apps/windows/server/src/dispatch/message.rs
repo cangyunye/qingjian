@@ -44,6 +44,9 @@ impl Router {
             ClientMessage::Poll { session } => Some(self.handle_poll(session)),
             ClientMessage::Commit { session } => {
                 let text = self.commit_raw_for(session);
+                if let Some(text) = &text {
+                    self.note_committed(text);
+                }
                 tracing::debug!(?session, ?text, "焦点离开，结束组句");
                 Some(ServerMessage::Committed { session, text })
             }
@@ -71,6 +74,7 @@ impl Router {
                 // 组句在 DLL 侧结束（应用终止组句 / 翻译评审失焦）：只收窗口；缓冲留给下一键的 Commit 清。
                 if self.focused == Some(session) {
                     self.end_translation();
+                    self.end_speak();
                     self.hide_candidate_window();
                 }
                 None
@@ -110,6 +114,16 @@ impl Router {
         }
         if self.engine.composition().is_empty()
             && self.engine.prediction_enabled()
+            && self.matches_speak_combo(&event)
+        {
+            return self.start_speak(session);
+        }
+        // 朗读流程中敲了别的键（含翻译选中文字的快捷键）：结束朗读（清帧、停音频、作废在飞的翻译）。
+        if self.speak.is_some() {
+            self.end_speak();
+        }
+        if self.engine.composition().is_empty()
+            && self.engine.prediction_enabled()
             && self.matches_translate_combo(&event)
         {
             self.selection_seq += 1;
@@ -126,6 +140,9 @@ impl Router {
         }
         let (commit, outcome) = match self.apply_key(&event) {
             Effect::Changed(commit) => {
+                if let Some(text) = &commit {
+                    self.note_committed(text);
+                }
                 self.recompose();
                 (commit, KeyOutcome::Consumed)
             }

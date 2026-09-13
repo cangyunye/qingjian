@@ -113,6 +113,8 @@ translation_second = "shift+option"
 # 把应用里选中的文字译成学习语言（要开着云服务）：译文先出现在候选窗口，回车替换选中的文字，Esc 保留原文
 # 修饰键 + 一个字母或数字，任意组合；避开 ⌘T 这类应用常用键
 translate_selection = "control+option+t"
+# 朗读最近上屏语句的译文（要开着云服务）：系统本地语音读，译文不外发；别与 translate_selection 撞键
+speak_translation = "control+option+r"
 # 数字键配这些修饰键删掉候选：用户词（云端选过的、自动造的）整个删掉，词库里的词清掉对它的学习记录。组句中要打感叹号先把词上屏
 delete_candidate = "shift"
 "#
@@ -129,6 +131,8 @@ translation = "ctrl"
 translation_second = "shift+ctrl"
 # 把应用里选中的文字译成学习语言（要开着云服务）：Windows 上还没接
 translate_selection = "ctrl+alt+t"
+# 朗读最近上屏语句的译文（要开着云服务）：系统本地语音读，译文不外发；别与 translate_selection 撞键。改了修饰键要切走再切回输入法才生效
+speak_translation = "ctrl+alt+r"
 # 数字键配这些修饰键删掉候选：用户词（云端选过的、自动造的）整个删掉，词库里的词清掉对它的学习记录。组句中要打感叹号先把词上屏
 delete_candidate = "shift"
 "#
@@ -398,7 +402,10 @@ mod tests {
         assert_eq!(config.general.log_level, LogLevel::Info);
         assert_eq!(config.shortcut.mode.expression, 'i');
         assert_eq!(config.shortcut.mode.question, 'u');
-        assert_eq!(config.shortcut.translation, Modifiers::OPTION);
+        assert_eq!(
+            config.shortcut.translation,
+            ShortcutConfig::default().translation
+        );
     }
 
     #[test]

@@ -9,6 +9,8 @@ repository.workspace = true
 [[bin]]
 name = "qingjian-server"
 path = "src/main.rs"
+# bin 里没有单测；测试壳会带上 uiAccess manifest，一启动就要提权（os error 740），直接关掉
+test = false
 
 # 嵌 uiAccess manifest（见 build.rs）
 [build-dependencies]
@@ -38,9 +40,11 @@ windows-registry.workspace = true
 windows = { version = "0.62.2", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
+    "Win32_Media_Speech",
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
+    "Win32_System_Com",
     "Win32_System_IO",
     "Win32_System_LibraryLoader",
     "Win32_System_Pipes",

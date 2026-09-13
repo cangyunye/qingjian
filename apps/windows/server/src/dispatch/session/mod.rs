@@ -59,7 +59,7 @@ impl Router {
         text
     }
 
-    /// 清掉组句、展示状态、在飞的云联想与翻译评审，收起候选窗口。
+    /// 清掉组句、展示状态、在飞的云联想、翻译评审与朗读流程，收起候选窗口。
     pub(super) fn reset_composition(&mut self) {
         self.engine.break_chain();
         self.engine.clear();
@@ -67,6 +67,7 @@ impl Router {
         self.stop_rescoring();
         self.composed = None;
         self.translation = None;
+        self.end_speak();
         self.pending_selection = None;
         self.sentence = None;
         self.notice = None;
