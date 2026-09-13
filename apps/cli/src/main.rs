@@ -3,6 +3,10 @@
 //! 输入拼音，打印候选（词性 + 译文）和各阶段耗时；输入序号上屏并记入用户词频。
 //! 不依赖任何平台 API，是 Core 的第一个「壳」。
 
+// CliError 的 Config 变体包着 toml::de::Error（toml 1.1 起 >128 字节），触发 result_large_err；
+// CLI 工具对 Err 体积不敏感，整 crate 放开（toml 1.1.5 随锁文件进入后，CI 的 clippy 也会挂）。
+#![allow(clippy::result_large_err)]
+
 mod args;
 mod display;
 mod error;

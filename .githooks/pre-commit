@@ -15,4 +15,9 @@ if [[ -n "$staged_rs" ]]; then
 fi
 
 cargo fmt --all --check
-cargo clippy --all-targets -- -D warnings
+# macOS 壳（objc2）只能在 Apple 平台编译：其它平台的全量 lint 排除它（CI 在 mac runner 上单独跑它）
+excludes=()
+if [[ "$(uname -s)" != "Darwin" ]]; then
+  excludes+=(--exclude qingjian-macos)
+fi
+cargo clippy --workspace "${excludes[@]}" --all-targets -- -D warnings
