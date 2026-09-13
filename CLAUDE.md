@@ -102,6 +102,8 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt --all
 ```
 
+本地构建也可走 `task`（go-task，`winget install Task.Task`）：`task check` 一键 fmt + clippy + 全量测试（Windows 上自动排除 macOS 壳），`task dll-register` / `task server` 跑 Windows 输入法，全部任务见 `Taskfile.yaml`。
+
 `cargo run -p qingjian-cli -- <拼音>...` 是 Core 的主要验证方式。macOS 输入法（Phase 2）无法通过 `cargo run` 验证：IMK 需要打包成 `.app`、装到
 `~/Library/Input Methods/`、注销或重启输入法进程才会生效。Core 的验证要靠
 `docs/plan/roadmap.md` 中规划的 CLI 测试工具和单元测试，不要依赖跑起真实输入法。

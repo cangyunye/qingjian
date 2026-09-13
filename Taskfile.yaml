@@ -1,0 +1,84 @@
+version: '3'
+
+# 本地构建入口（go-task：winget install Task.Task 或 scoop install go-task，仓库根 `task <任务名>`）。
+# 提交前跑 `task check`（fmt + clippy + 全量测试，与 .githooks 门禁等价）；
+# Windows 上全量测试排除 macOS 壳（IMK 只在 mac 编译），mac 上请直接 `cargo test --workspace --locked`。
+
+tasks:
+  build:
+    desc: 构建整个 workspace（debug；Windows 上排除 macOS 壳，objc2 只在 Apple 平台编译）
+    cmds:
+      - cargo build --workspace --exclude qingjian-macos
+
+  build-release:
+    desc: 构建整个 workspace（release；同样排除 macOS 壳）
+    cmds:
+      - cargo build --workspace --release --exclude qingjian-macos
+
+  fmt:
+    desc: 格式化全部代码
+    cmds:
+      - cargo fmt --all
+
+  clippy:
+    desc: Lint（与 CI 同参，警告即错误；排除 macOS 壳，CI 在 mac runner 上单独跑它）
+    cmds:
+      - cargo clippy --workspace --all-targets --exclude qingjian-macos -- -D warnings
+
+  test:
+    desc: 全量测试（--locked；Windows 上排除 macOS 壳）
+    cmds:
+      - cargo test --workspace --locked --exclude qingjian-macos
+
+  check:
+    desc: 提交前门禁：fmt + clippy + 全量测试
+    cmds:
+      - task: fmt
+      - task: clippy
+      - task: test
+
+  cli:
+    desc: 跑 Core 测试工具（拼音透传，如 task cli -- kaifa；--replay / --eval-text 等）
+    cmds:
+      - cargo run -p qingjian-cli -- {{.CLI_ARGS}}
+
+  server:
+    desc: 前台跑 Windows Server（调试用；未签名 exe 带 uiAccess 起不来，这里自动按 QINGJIAN_UIACCESS=0 重编，代价是候选窗在 UWP 宿主里可能被盖）
+    platforms: [windows]
+    env:
+      QINGJIAN_UIACCESS: "0"
+    cmds:
+      - cargo run -p qingjian-windows-server
+
+  dll-register:
+    desc: 注册 debug 构建的 TSF DLL 进系统（弹 UAC 提权，无需另开管理员终端；改配置里的保留键后要切走再切回输入法）
+    platforms: [windows]
+    cmds:
+      - |
+        powershell -NoProfile -Command '$t = $env:CARGO_TARGET_DIR; if (-not $t) { $t = "target" }; $dll = Join-Path $t "debug/qingjian_tsf.dll"; if (-not (Test-Path $dll)) { Write-Error "找不到 $dll，请先 task build"; exit 1 }; Start-Process regsvr32 -ArgumentList $dll -Verb RunAs -Wait'
+
+  dll-unregister:
+    desc: 反注册 TSF DLL（弹 UAC 提权）
+    platforms: [windows]
+    cmds:
+      - |
+        powershell -NoProfile -Command '$t = $env:CARGO_TARGET_DIR; if (-not $t) { $t = "target" }; $dll = Join-Path $t "debug/qingjian_tsf.dll"; Start-Process regsvr32 -ArgumentList "/u", $dll -Verb RunAs -Wait'
+
+  installer:
+    desc: 构建 Inno Setup 安装包（需要装 Inno Setup 6，release 构建较慢）
+    platforms: [windows]
+    cmds:
+      - |
+        powershell -NoProfile -Command 'if (-not (Get-Command iscc -ErrorAction SilentlyContinue) -and -not (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe")) { Write-Error "没找到 Inno Setup 6 的 ISCC.exe，请先安装：https://jrsoftware.org/isdl.php"; exit 1 }'
+      - powershell -NoProfile -ExecutionPolicy Bypass -File apps/windows/installer/build.ps1
+
+  tts-smoke:
+    desc: 手跑 SAPI 朗读冒烟测试（真的会出声，平时被 --ignore 跳过）
+    platforms: [windows]
+    cmds:
+      - cargo test -p qingjian-windows-server --test tts_smoke -- --ignored --nocapture
+
+  hooks:
+    desc: 启用仓库 git 钩子（pre-commit：fmt + clippy；pre-push：全量测试）
+    cmds:
+      - git config core.hooksPath .githooks
