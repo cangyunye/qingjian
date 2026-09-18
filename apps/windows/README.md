@@ -53,7 +53,35 @@ cargo check --target x86_64-pc-windows-gnu -p qingjian-windows-server -p qingjia
 cargo test -p qingjian-windows-server -p qingjian-windows-tsf
 ```
 
-真正编译与试用都在 Windows 机器上（MSVC 工具链）：
+真正编译与试用都在 Windows 机器上（MSVC 工具链）。
+
+### 本地联调：`scripts/test-local.ps1`
+
+改了 Server 或 DLL 之后要试手，用这个脚本，别手敲：
+
+```powershell
+pwsh -File apps\windows\scripts\test-local.ps1            # 编译 + 换 Server + 起，DLL 那步要管理员
+pwsh -File apps\windows\scripts\test-local.ps1 -SkipBuild -SkipRegister
+```
+
+它做四件事：编 Server 与 TSF DLL（带 `QINGJIAN_UIACCESS=0`，没签名的 exe 带 uiAccess 起不来）、
+停掉在跑的 Server、把**已安装目录整份拷到 `~\qingjian-devtest`** 再换上新的 Server 与随包数据、
+起 Server 并打印剩下要手动做的事（注册 DLL、设方案、敲哪几组键）。
+
+> **脚本存成带 BOM 的 UTF-8**（`sign-local.ps1` 也是）。Windows PowerShell 5.1 对没有 BOM 的 `.ps1`
+> 按系统 ANSI 码页解析，中文会变成乱码、引号配对跟着崩，报出来的却是「字符串缺少终止符」这种语法错。
+> 编辑时别把 BOM 去掉。PS7 两种都读得对，所以只用 `pwsh` 验会漏掉这个问题。
+
+**为什么不在仓库里直接跑**：`bundled_root()` 按 exe 位置找数据，`target\debug\` 下会落到仓库根，
+而 `data\generated\` 是 gitignore 的、本机多半没有，于是退回 `assets\sample\` 样例——形码候选照样出得来
+（码表独立），但译文几乎全空，会让人误以为释义那条设计没生效。
+
+**为什么两边要一起换**：`qingjian_core::Candidate` 是线上格式的一部分（见 `protocol/mod.rs`）。
+Core 加一个 `CandidateKind` 变体，老 DLL 就解不出整条帧、把按键原样放行——表现是「输入法突然只出英文」，
+日志里只有一句 `unknown variant`。所以 Server 与 DLL 必须同一份源码编出来的；协议版本号对不上时
+Server 会记警告，但**它只警告、不拒绝**，别指望它兜住。
+
+### 手工步骤（脚本里也在做，供对照）
 
 ```bat
 :: 1) 编译出 DLL 与 Server
@@ -66,11 +94,20 @@ regsvr32 target\debug\qingjian_tsf.dll
 cargo run -p qingjian-windows-server
 
 :: 4) 在系统「语言 / 输入法」里应能看到「青简」，切到它，在任意输入框敲字
-::    DLL 侧日志在 %LOCALAPPDATA%\Qingjian\tsf.<日期>.log（按天，留 7 天）
+::    日志都在 %LOCALAPPDATA%\Qingjian\logs\：server.<日期>.log / tsf.<日期>.log / settings.<日期>.log（按天，留 7 天）
 
 :: 反注册
 regsvr32 /u target\debug\qingjian_tsf.dll
 ```
+
+## 设置程序与 Windows App Runtime
+
+`settings/`（`qingjian-settings.exe`）用 Windows Reactor（WinUI 3）画界面，是三个产物里唯一依赖 Windows App Runtime 的。
+它的部署方式是**自包含**：`build.rs` 让 `windows-reactor-setup` 把 `Microsoft.WindowsAppSDK.Runtime` 的 MSIX 解到
+`target\release\` 并按自包含标记嵌清单，安装包把这些文件装到 exe 同级——不依赖机器上装没装框架包。
+Windows 10 上框架依赖的引导走不通（它要先调 Windows 11 才有的 `TryCreatePackageDependency`），
+同一个 `build.rs` 还把这两个 API 改成延迟加载：否则它们会进 exe 的导入表，Windows 10 在加载期就起不来。
+定位过程、上游 issue / PR 与取舍见 `docs/notes/windows-win10.md`；打包侧见 `apps/windows/installer/README.md`。
 
 ## 版本与发布
 

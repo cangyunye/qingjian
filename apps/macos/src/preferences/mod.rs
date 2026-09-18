@@ -1,8 +1,8 @@
 //! 偏好设置窗口：配置文件的图形前端。
 //!
-//! 没有「保存」按钮，每个控件改完立即写回 `config.toml`（`Config::set_value`，保留注释），
+//! 普通控件改完立即写回 `config.toml`（`Config::set_value`，保留注释），
 //! 再经 [`crate::host::Host::apply_config`] 生效；窗口自己不存任何状态，勾选与文本永远从配置同步过来。
-//! 密钥例外：写到配置同目录的 `.env`，不进 `config.toml`。
+//! 自定义短语通过保存按钮校验后写入；密钥例外：写到配置同目录的 `.env`，不进 `config.toml`。
 //!
 //! 输入法进程是 `LSBackgroundOnly`，平时不能成为前台应用；打开窗口前把激活策略临时切成 Accessory，
 //! 关窗时切回去，否则文本框拿不到键盘焦点。文本框里的 ⌘C / ⌘V 靠主菜单「编辑」项的快捷键分发，
@@ -11,6 +11,7 @@
 mod controls;
 mod edit_menu;
 mod file_dialog;
+mod font_picker;
 mod key_recorder;
 mod layout;
 mod pages;
@@ -27,6 +28,9 @@ pub use key_recorder::KeyRecorder;
 pub use pages::{REPOSITORY_URL, WEBSITE_URL};
 pub use setting::{Setting, SettingValue};
 pub use window::PreferencesWindow;
+
+/// 字体组合框里代表「用系统字体」的那一项。
+pub const DEFAULT_FONT_LABEL: &str = "系统默认";
 
 /// 从 `changed:` 的 sender 认出是哪个设置、现在的值是什么。
 pub fn setting_from_sender(sender: Option<&AnyObject>) -> Option<(Setting, SettingValue)> {

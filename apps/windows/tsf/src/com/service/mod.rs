@@ -6,6 +6,7 @@ mod connection;
 mod display;
 mod document;
 mod key_sink;
+mod launch;
 mod mode;
 mod next;
 mod processor;
@@ -21,9 +22,10 @@ use windows::Win32::UI::TextServices::{
 use windows::core::{ComObject, implement};
 
 use qingjian_platform::KeyCombo;
+use qingjian_platform::protocol::InputSettings;
 
 use super::composition::Shared;
-use super::key::ShiftTap;
+use super::key::KeyTap;
 use super::mode::ModeState;
 use super::poll::PollTimer;
 use crate::client::EngineClient;
@@ -56,7 +58,7 @@ pub struct TextService {
     /// 上次连 Server 失败的时间，按 [`RECONNECT_INTERVAL`] 退避。
     last_connect_failure: Cell<Option<Instant>>,
 
-    /// 中 / 英模式（单击 Shift 翻转），与语言栏按钮共用。
+    /// 中 / 英模式（单击切换键翻转，见 `[shortcut] switch_mode`），与语言栏按钮共用。
     mode_state: Rc<ModeState>,
 
     /// 登记在系统语言栏上的中 / 英按钮；停用时反注册。
@@ -65,8 +67,8 @@ pub struct TextService {
     /// 「转换模式」compartment 的事件回调（source + cookie），反向同步任务栏点选；停用时撤掉。
     conversion_sink: RefCell<Option<(ITfSource, u32)>>,
 
-    /// 单击 Shift 切中英的判定。
-    shift_tap: ShiftTap,
+    /// 单击中英切换键切中英的判定。
+    key_tap: KeyTap,
 
     /// 语言 profile 通知挂上后的 cookie；挂一次就够（见 [`super::profile`]）。
     profile_cookie: Cell<Option<u32>>,
@@ -76,6 +78,16 @@ pub struct TextService {
 
     /// 登记成保留键的「朗读译文」组合；停用时撤掉。
     speak_combo: Cell<Option<KeyCombo>>,
+
+    /// Ctrl+Space 切换键当前是否已登记为保留键（`[shortcut] switch_mode = "ctrl+space"` 时才有）。
+    switch_preserved: Cell<bool>,
+
+    /// 上一次应用过的按键行为设置；与 Server 下发的一致时就不重复应用
+    /// （每一拍 `SyncMode` 都带着它，见 [`TextService_Impl::apply_input_settings`]）。
+    input_settings: Cell<Option<InputSettings>>,
+
+    /// 激活后一小段时间内忽略转换模式 compartment 的变化，见 [`TextService_Impl::sync_from_conversion_mode`]。
+    conversion_guard_until: Cell<Option<Instant>>,
 }
 
 thread_local! {
@@ -109,6 +121,11 @@ pub(super) fn on_mode_sync(english: bool) {
     });
 }
 
+/// 轮询取回了 Server 下发的按键行为设置（见 [`super::poll`]）：切换键 / 内置英文模式改了就地应用。
+pub(super) fn on_input_settings(input: InputSettings) {
+    with_active(|service| service.apply_input_settings(input));
+}
+
 impl TextService {
     #[allow(clippy::new_without_default)] // 有 lock_module 副作用
     pub fn new() -> Self {
@@ -124,10 +141,13 @@ impl TextService {
             mode_state: ModeState::new(),
             mode_button: RefCell::new(None),
             conversion_sink: RefCell::new(None),
-            shift_tap: ShiftTap::default(),
+            key_tap: KeyTap::default(),
             profile_cookie: Cell::new(None),
             translate_combo: Cell::new(None),
             speak_combo: Cell::new(None),
+            switch_preserved: Cell::new(false),
+            input_settings: Cell::new(None),
+            conversion_guard_until: Cell::new(None),
         }
     }
 }

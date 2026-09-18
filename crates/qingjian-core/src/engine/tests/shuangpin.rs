@@ -11,7 +11,7 @@ fn shuangpin_decodes_keys_before_lookup_and_shows_full_pinyin() {
     assert_eq!(query.marked_text(), "kai'fa");
     assert_eq!(query.marked_cursor(), 6);
     assert_eq!(query.text, "kdfa");
-    assert!(query.shuangpin);
+    assert!(query.decoded_keys);
     // 末尾落单的键是声母前缀：`kdf` = kai f…
     engine.set_input("kdf");
     let query = engine.query().unwrap();
@@ -62,14 +62,37 @@ fn shuangpin_records_choices_by_full_pinyin() {
 }
 
 #[test]
-fn shuangpin_gives_letter_mode_keys_back_to_syllables() {
+fn shuangpin_moves_mode_keys_to_shifted_letters() {
     let mut engine = xiaohe();
     engine.set_input("v");
     assert!(!engine.expression_mode());
     assert_eq!(engine.query().unwrap().marked_text(), "zh");
     engine.set_input("u1");
     assert!(!engine.question_mode());
-    // `?` 别名照常进问字
+    // Shift+V / Shift+U 进模式，之后与全拼下的 v / u 一样
+    assert!(engine.takes_mode_letter('V') && engine.takes_mode_letter('U'));
+    assert!(!engine.takes_mode_letter('v') && !engine.takes_mode_letter('I'));
+    engine.set_input("V1+2");
+    assert!(engine.expression_mode() && !engine.raw_mode());
+    assert_eq!(engine.query().unwrap().candidates.items[0].text, "3");
+    engine.set_input("U4e00");
+    assert!(engine.question_mode() && engine.unicode_entry());
+    assert_eq!(engine.query().unwrap().candidates.items[0].text, "一");
+    engine.set_input("Unihc");
+    assert!(engine.question_mode());
+    assert_eq!(engine.query().unwrap().marked_text(), "Uni'hao");
+    // 全拼下大写字母不是入口
+    let mut full = super::engine();
+    assert!(!full.takes_mode_letter('V'));
+    full.set_input("V1+2");
+    assert!(!full.expression_mode());
+    // `?` 入口开着时照常进问字（缺省关）
+    engine.set_input("?nihc");
+    assert!(!engine.question_mode());
+    engine.set_mode_keys(ModeKeys {
+        question_mark: true,
+        ..ModeKeys::default()
+    });
     engine.set_input("?nihc");
     assert!(engine.question_mode());
     assert_eq!(engine.query().unwrap().marked_text(), "?ni'hao");
@@ -86,6 +109,10 @@ fn microsoft_semicolon_is_a_final_only_after_a_lone_initial() {
     assert!(!engine.raw_mode());
     assert_eq!(engine.query().unwrap().marked_text(), "xing");
     // 问字模式里也认：`?x;` 问的是 xing
+    engine.set_mode_keys(ModeKeys {
+        question_mark: true,
+        ..ModeKeys::default()
+    });
     engine.set_input("?x");
     assert!(engine.takes_semicolon());
     engine.push(';');

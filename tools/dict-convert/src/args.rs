@@ -49,6 +49,20 @@ pub enum Command {
         domain_keep_min: u64,
     },
 
+    /// 形码码表（五笔）：Rime `.dict.yaml` → `词\t编码\t词频`。词频由青简词库按词面回填，不用码表自带的权重
+    Wubi {
+        /// 输入的 Rime 码表（`.dict.yaml`，如极点 86 五笔）
+        input: PathBuf,
+
+        /// 词频来源：青简词库 TSV（`词\t拼音\t词频`）。可给多个（基础词库 + 随包领域词库），同一个词取词频最大的那份
+        #[arg(long, default_value = "assets/lexicon/dict.tsv", num_args = 1..)]
+        frequency: Vec<PathBuf>,
+
+        /// 输出文件名（写在 --out-dir 下）
+        #[arg(long, default_value = "wubi86.tsv")]
+        name: String,
+    },
+
     /// CC-CEDICT `cedict_ts.u8` → glossary-en.tsv
     Cedict {
         /// 输入文件
@@ -91,9 +105,10 @@ pub enum Command {
         #[arg(long)]
         phrases: Vec<PathBuf>,
 
-        /// 品牌词文件（assets/lexicon/brand.tsv）：语料里没有的词按文件给的次数写进一元表
+        /// 品牌词文件（assets/lexicon/brand.tsv，可给多个，中英混杂词 mixed_words.tsv 也走这条路）：语料里没有的词按文件给的次数写进一元表。
+        /// 与 --phrases 的区别：合成计数要成分词在语料里，C盘 的 C 不是语料 token，只能直接给
         #[arg(long)]
-        brand: Option<PathBuf>,
+        brand: Vec<PathBuf>,
 
         /// 计数低于此值的二元组不输出
         #[arg(long, default_value_t = 3)]
@@ -193,7 +208,7 @@ pub enum Command {
         #[arg(long, default_value = "")]
         data_version: String,
 
-        /// `glossary` 专用：释义表的语言代码（en / ja / zh），决定输出文件名 glossary-<语言>.qj
+        /// `glossary` 专用：释义表的语言代码（en / ja / zh / es），决定输出文件名 glossary-<语言>.qj
         #[arg(long, default_value = "en")]
         language: String,
     },

@@ -2,8 +2,54 @@
 
 use super::diagnostics::{copy_to_pasteboard, open_with_system};
 use super::*;
+use crate::preferences::DEFAULT_FONT_LABEL;
+use qingjian_platform::ShiftLetter;
 
 impl Host {
+    /// 写短语前读取文件；外部规则有变化时同步列表并请用户重新确认。
+    fn phrases_are_current(&mut self) -> bool {
+        let Some(path) = self.settings.path() else {
+            return false;
+        };
+        match qingjian_platform::Config::load(path) {
+            Ok(latest) if latest.custom_phrases == self.settings.config().custom_phrases => true,
+            Ok(_) => {
+                self.settings.reload();
+                self.apply_config(false);
+                let message = "规则已在其他地方修改，请重新确认后操作。";
+                self.preferences.set_phrase_error(message);
+                self.preferences.set_status(message);
+                false
+            }
+            Err(error) => {
+                self.preferences.set_phrase_error(&error.to_string());
+                self.preferences.set_status(&error.to_string());
+                false
+            }
+        }
+    }
+
+    /// 表格中的启用开关只修改所选规则。
+    pub fn set_phrase_enabled(&mut self, index: usize, enabled: bool) {
+        if !self.phrases_are_current() {
+            return;
+        }
+        let mut phrases = self.settings.config().custom_phrases.clone();
+        let Some(phrase) = phrases.get_mut(index) else {
+            return;
+        };
+        phrase.enabled = enabled;
+        let Some(path) = self.settings.path() else {
+            return;
+        };
+        let result = qingjian_platform::Config::set_custom_phrases(path, &phrases);
+        self.settings.reload();
+        self.apply_config(false);
+        if let Err(error) = result {
+            self.preferences.set_status(&error);
+        }
+    }
+
     /// 菜单动作。开关类先落盘再热加载，菜单勾选状态永远来自文件里的值。
     pub fn perform(&mut self, action: MenuAction) {
         tracing::info!(?action, "菜单");
@@ -25,7 +71,7 @@ impl Host {
                 self.preferences.sync_usage(
                     &self.engine.usage_summary(),
                     &self.engine.vocabulary_summary(),
-                    self.engine.learning_language(),
+                    self.learning_language,
                 );
                 self.preferences.show();
             }
@@ -43,11 +89,90 @@ impl Host {
         tracing::info!(?setting, "设置");
         let config = self.settings.config().clone();
         match (setting, value) {
-            (Setting::LearningLanguage, SettingValue::Index(index)) => {
-                if let Some(language) = self.languages.get(index) {
-                    self.settings
-                        .set_value("general", "learning_language", language.code());
+            (Setting::NewPhrase, _) => {
+                self.preferences.edit_phrase(&config, None);
+                return;
+            }
+            (Setting::EditPhrase, _) => {
+                if let Some(index) = self.preferences.selected_phrase() {
+                    self.preferences.edit_phrase(&config, Some(index));
                 }
+                return;
+            }
+            (Setting::CancelPhraseEdit, _) => {
+                self.preferences.close_phrase_editor();
+                return;
+            }
+
+            (Setting::PhraseDraft, _) => return,
+            (Setting::SelectPhrase, SettingValue::Index(index)) => {
+                self.preferences.select_phrase(&config, index);
+                return;
+            }
+            (Setting::SavePhrase | Setting::DeletePhrase, _) => {
+                if !self.phrases_are_current() {
+                    return;
+                }
+                let config = self.settings.config();
+                let mut phrases = config.custom_phrases.clone();
+                let mut saved_index = phrases.len();
+                if setting == Setting::DeletePhrase {
+                    let Some(index) = self.preferences.selected_phrase() else {
+                        return;
+                    };
+                    if index >= phrases.len() {
+                        return;
+                    }
+                    phrases.remove(index);
+                } else {
+                    let (index, draft) = match self.preferences.phrase_draft(config) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            self.preferences.set_phrase_error(&error);
+                            self.preferences.set_status(&error);
+                            return;
+                        }
+                    };
+                    if let Some(index) = index {
+                        let Some(phrase) = phrases.get_mut(index) else {
+                            return;
+                        };
+                        *phrase = draft;
+                        saved_index = index;
+                    } else {
+                        phrases.push(draft);
+                    }
+                }
+                let Some(path) = self.settings.path() else {
+                    return;
+                };
+                if let Err(error) = qingjian_platform::Config::set_custom_phrases(path, &phrases) {
+                    self.preferences.set_phrase_error(&error);
+                    self.preferences.set_status(&error);
+                    return;
+                }
+                self.preferences.close_phrase_editor();
+                self.settings.reload();
+                self.apply_config(false);
+                if setting == Setting::SavePhrase {
+                    self.preferences
+                        .select_phrase(self.settings.config(), saved_index + 1);
+                }
+                self.preferences.set_status("自定义短语已保存");
+                return;
+            }
+            (Setting::FullWidthPunctuation, SettingValue::Index(index)) => {
+                self.settings
+                    .set_bool("general", "full_width_punctuation", index == 0);
+            }
+            (Setting::LearningLanguage, SettingValue::Index(index)) => {
+                // 菜单最后一项是「不显示译文」
+                let code = self
+                    .languages
+                    .get(index)
+                    .map_or(LEARNING_LANGUAGE_OFF, |language| language.code());
+                self.settings
+                    .set_value("general", "learning_language", code);
             }
             (Setting::PageSize, SettingValue::Index(index)) => {
                 self.settings
@@ -63,6 +188,17 @@ impl Host {
                     self.settings.set_value("general", "theme", theme.key());
                 }
             }
+            (Setting::Renderer, SettingValue::Index(index)) => {
+                if let Some(renderer) = CandidateRenderer::ALL.get(index) {
+                    self.settings
+                        .set_value("general", "renderer", renderer.key());
+                }
+            }
+            (Setting::Font, SettingValue::Text(text)) => {
+                let font = text.trim();
+                let font = if font == DEFAULT_FONT_LABEL { "" } else { font };
+                self.settings.set_value("general", "font", font);
+            }
             (Setting::Layout, SettingValue::Index(index)) => {
                 if let Some(layout) = LayoutMode::ALL.get(index) {
                     self.settings.set_value("general", "layout", layout.key());
@@ -72,6 +208,9 @@ impl Host {
                 if let Some(mode) = PreeditMode::ALL.get(index) {
                     self.settings.set_value("general", "preedit", mode.key());
                 }
+            }
+            (Setting::QuestionMark, SettingValue::Bool(on)) => {
+                self.settings.set_bool("shortcut", "question_mark", on);
             }
             (Setting::ExpressionKey | Setting::QuestionKey, SettingValue::Index(index)) => {
                 if let Some(&key) = ModeKeys::CANDIDATES.get(index) {
@@ -147,6 +286,8 @@ impl Host {
                 self.settings
                     .set_value("shortcut", "question", defaults.mode.question.to_string());
                 self.settings
+                    .set_bool("shortcut", "question_mark", defaults.mode.question_mark);
+                self.settings
                     .set_value("shortcut", "translation", defaults.translation.key());
                 self.settings.set_value(
                     "shortcut",
@@ -196,8 +337,23 @@ impl Host {
             (Setting::CloudSlots, SettingValue::Index(index)) => {
                 self.settings.set_value("predict", "slots", index as i64);
             }
+            (Setting::Traditional, SettingValue::Bool(on)) => {
+                self.settings.set_bool("general", "traditional", on);
+            }
             (Setting::EnglishCandidates, SettingValue::Bool(on)) => {
                 self.settings.set_bool("general", "english_candidates", on);
+            }
+            (Setting::ChineseFirst, SettingValue::Bool(on)) => {
+                self.settings.set_bool("general", "chinese_first", on);
+            }
+            (Setting::ShiftLetter, SettingValue::Bool(on)) => {
+                let mode = if on {
+                    ShiftLetter::Compose
+                } else {
+                    ShiftLetter::Passthrough
+                };
+                self.settings
+                    .set_value("general", "shift_letter", mode.key());
             }
             // 勾上写缺省的终端 / 编辑器列表，去掉写空表；手改过的列表勾一下就回缺省
             (Setting::EnglishCandidatesOffInApps, SettingValue::Bool(on)) => {
@@ -209,13 +365,18 @@ impl Host {
                 self.settings
                     .set_value("apps", "english_candidates_off", apps);
             }
-            // 弹出菜单第 0 项是「关」，之后按 ShuangpinScheme::ALL 的顺序
-            (Setting::Shuangpin, SettingValue::Index(index)) => {
-                let key = index
-                    .checked_sub(1)
-                    .and_then(|i| ShuangpinScheme::ALL.get(i))
-                    .map_or("", |scheme| scheme.key());
-                self.settings.set_value("general", "shuangpin", key);
+            // 弹出菜单按 Scheme::ALL 的顺序。写的是 [general] scheme（旧键 shuangpin 已并入它）：
+            // 写旧键的话，配置里 scheme 的缺省值非空、解析时优先，用户选的方案会被静默忽略。
+            (Setting::Scheme, SettingValue::Index(index)) => {
+                let key = Scheme::ALL
+                    .get(index)
+                    .map_or(Scheme::Pinyin.key(), |scheme| scheme.key());
+                self.settings.set_value("general", "scheme", key);
+            }
+            // 五笔：勾上就是 86 版，取消就是关。与上面的拼音方案同时开着就是混输。
+            (Setting::Wubi, SettingValue::Bool(on)) => {
+                self.settings
+                    .set_value("general", "wubi", if on { "wubi86" } else { "" });
             }
             // 文本框失焦也会发 action：值没变就不写，免得每次切窗口都重写一遍配置
             (Setting::BaseUrl, SettingValue::Text(text)) => {
@@ -252,6 +413,13 @@ impl Host {
             (Setting::InputLog, SettingValue::Bool(on)) => {
                 self.settings.set_bool("general", "input_log", on);
             }
+            (Setting::Learning, SettingValue::Bool(on)) => {
+                self.settings.set_bool("general", "learning", on);
+            }
+            (Setting::SystemTextReplacements, SettingValue::Bool(on)) => {
+                self.settings
+                    .set_bool("general", "system_text_replacements", on);
+            }
             (Setting::ClearInputLog, _) => {
                 self.clear_input_log();
                 return;
@@ -278,6 +446,19 @@ impl Host {
                 copy_to_pasteboard(&self.diagnostics());
                 self.preferences
                     .set_status("诊断信息已复制到剪贴板，粘贴给作者即可");
+                return;
+            }
+            (Setting::ExportLogs, _) => {
+                match logging::export_logs() {
+                    Ok(zip) => {
+                        open_with_system(&["-R", &zip.to_string_lossy()]);
+                        self.preferences
+                            .set_status("日志已打包到桌面，发给作者即可");
+                    }
+                    Err(error) => self
+                        .preferences
+                        .set_status(&format!("打包日志失败：{error}")),
+                }
                 return;
             }
             (setting, value) => tracing::warn!(?setting, ?value, "设置项与控件值不匹配"),

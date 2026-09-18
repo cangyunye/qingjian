@@ -61,7 +61,11 @@ impl Row {
         }
         Self {
             index: (position + 1).to_string(),
-            text: candidate.text.clone(),
+            text: if matches!(candidate.kind, qingjian_core::CandidateKind::Custom(_)) {
+                qingjian_core::CustomPhrase::preview(&candidate.text, 60)
+            } else {
+                candidate.text.clone()
+            },
             annotation,
             cloud: false,
         }

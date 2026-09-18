@@ -3,7 +3,7 @@
 #
 #   scripts/bundle.sh            # 只打包到 target/Qingjian.app
 #   scripts/bundle.sh --install  # 打包并安装到 ~/Library/Input Methods/，杀掉旧进程（开发用）
-#   scripts/bundle.sh --pkg      # 打包并做成 target/pkg/Qingjian-<版本>-<arm64|x86_64>.pkg（分发给测试者）
+#   scripts/bundle.sh --pkg      # 打包并做成 target/pkg/qingjian-<版本>-macos-<arm64|x86_64>.pkg（分发给测试者）
 #
 # 架构：缺省编译本机架构；QINGJIAN_TARGET=x86_64-apple-darwin（或 aarch64-apple-darwin）交叉编译另一种，
 # 先 `rustup target add` 一次。CI 在 Apple Silicon runner 上两个都打（.github/workflows/release.yml）。
@@ -53,8 +53,10 @@ cp "$BIN_DIR/$BIN_NAME" "$APP/Contents/MacOS/$BIN_NAME"
 cp apps/macos/Info.plist "$APP/Contents/Info.plist"
 # 版本号来自 apps/macos/Cargo.toml（各平台壳版本号独立，不跟 workspace 走），构建号用提交数（单调递增，pkg 升级判断靠它）。
 # 发版之间版本号带 -dev（0.1.2-dev）：本地与 CI 中间构建一眼能与线上包区分；发版提交去掉 -dev 再打标签（docs/notes/release.md）。
+# 开发版再接上 git 短哈希（0.1.3-dev-1a2b3c4，工作区有改动加 +），测试时一眼知道装的是哪个提交；Cargo.toml 里仍只写 -dev。
 # pkgbuild / distribution 的 version 只认数字点号，去掉预发布后缀；Info.plist 与 pkg 文件名保留完整版本
 VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' apps/macos/Cargo.toml | head -1)"
+if [[ "$VERSION" == *-dev ]]; then VERSION="${VERSION}-${GIT_REV}"; fi
 PKG_VERSION="${VERSION%%-*}"
 BUILD_NUMBER="$(git rev-list --count HEAD 2>/dev/null || echo 1)"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" \
@@ -64,12 +66,15 @@ cp apps/macos/scripts/uninstall.sh "$APP/Contents/Resources/uninstall.sh"
 # 输入源名字按系统语言本地化（中文系统显示「青简」，其他显示 Qingjian）
 cp -R apps/macos/resources/*.lproj "$APP/Contents/Resources/"
 # 词库与释义表打进 Resources。data/generated/ 里有生成好的产品数据（自建词库 + 语言模型 + LLM 释义表）就用它，
-# 否则用 assets/sample/ 的样例。
+# 否则用 assets/sample/ 的样例。没有数据管道的机器跑 tools/release/data-fetch.sh 按 tools/release/data.lock 下载。
 cp assets/sample/*.tsv "$APP/Contents/Resources/"
 # emoji 表（Unicode CLDR，可发布）
 cp assets/emoji/*.tsv "$APP/Contents/Resources/"
 # 词汇等级表（CEFR-J / Octanove / JLPT，见 assets/levels/README.md），「统计」页按级数词汇
 cp assets/levels/levels-*.tsv "$APP/Contents/Resources/"
+# 五笔码表（输入方案选五笔时用，见 assets/wubi/README.md；极点 86 码表，Apache-2.0）
+mkdir -p "$APP/Contents/Resources/wubi"
+cp assets/wubi/wubi86.tsv "$APP/Contents/Resources/wubi/"
 if [[ -f data/generated/dict.tsv || -f data/generated/dict.qj ]]; then
   # 词库与语言模型打成 .qj（mmap 直接用），TSV 比 .qj 新时重新打包；只有 .qj（CI 从数据包解出来的）就直接用
   if [[ -f data/generated/dict.tsv && ( ! -f data/generated/dict.qj || data/generated/dict.tsv -nt data/generated/dict.qj ) ]]; then
@@ -100,14 +105,21 @@ if [[ -f data/generated/dict.tsv || -f data/generated/dict.qj ]]; then
     chmod 644 "$APP/Contents/Resources/model/model.qjm"
     echo "打包本地整句模型：$model_dir/model.qjm"
   fi
-  # 释义表打成 .qj（TSV 比 .qj 新时重打），英文词表仍是 TSV
-  for lang in en ja zh; do
+  # 释义表打成 .qj（TSV 比 .qj 新时重打），英文词表仍是 TSV。各表来源不同，元数据按表写（见 assets/glossary/README.md）
+  for lang in en ja zh es; do
     src="assets/glossary/glossary-$lang.tsv"
     out="data/generated/glossary-$lang.qj"
     [[ -f "$src" ]] || continue
+    if [[ "$lang" == es ]]; then
+      license="GPL-3.0-or-later"
+      attribution="Azure Translator 机器翻译（Tofuzhu，tools/corpus/glossary_es.py）"
+    else
+      license="MIT"
+      attribution="LLM 生成（DeepSeek），qingjian-gloss-gen"
+    fi
     if [[ ! -f "$out" || "$src" -nt "$out" ]]; then
       cargo run --release -q -p qingjian-dict-convert -- pack glossary --language "$lang" --input "$src" \
-        --name "青简释义表（${lang}）" --license "MIT" --attribution "LLM 生成（DeepSeek），qingjian-gloss-gen"
+        --name "青简释义表（${lang}）" --license "$license" --attribution "$attribution"
     fi
     cp "$out" "$APP/Contents/Resources/"
   done
@@ -118,7 +130,7 @@ if [[ -f data/generated/dict.tsv || -f data/generated/dict.qj ]]; then
 fi
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
-# 图标：从 assets/icon/logo.png 生成 .icns（应用图标）与多分辨率 tiff（输入法菜单图标）
+# 图标：应用图标从 assets/icon/logo.png 生成 .icns；输入法菜单图标直接用 assets/icon/menu.pdf（矢量，随 Info.plist 的 TISIconIsTemplate 按深浅色反色）
 ICONSET="$ROOT/target/Qingjian.iconset"
 rm -rf "$ICONSET" && mkdir -p "$ICONSET"
 for size in 16 32 128 256 512; do
@@ -127,8 +139,9 @@ for size in 16 32 128 256 512; do
   sips -z $double $double assets/icon/logo.png --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
 done
 iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/Qingjian.icns"
-tiffutil -cathidpicheck "$ICONSET/icon_16x16.png" "$ICONSET/icon_16x16@2x.png" \
-  -out "$APP/Contents/Resources/qingjian-menu.tiff" >/dev/null
+cp assets/icon/menu.pdf "$APP/Contents/Resources/qingjian-menu.pdf"
+# 仓库放在 iCloud 同步的目录（Documents）时新建的 .app 会带上 Finder 扩展属性，codesign 会拒（detritus not allowed）：签名前清掉
+xattr -cr "$APP"
 # Apple Silicon 上未签名的二进制不会被系统加载。有 Developer ID 证书就正式签（开 hardened runtime，公证要求），
 # 没有就 ad-hoc 签名，本机自用够了
 if [[ -n "${QINGJIAN_SIGN_IDENTITY:-}" ]]; then
@@ -141,7 +154,7 @@ echo "打包完成: ${APP}（版本 ${VERSION}，构建 ${BUILD_NUMBER}，${ARCH
 
 if [[ "${1:-}" == "--pkg" ]]; then
   # 每个架构一个工作目录，成品都放 target/pkg/，两个架构接着打互不覆盖
-  PKG="$ROOT/target/pkg/$APP_NAME-$VERSION-$ARCH.pkg"
+  PKG="$ROOT/target/pkg/qingjian-$VERSION-macos-$ARCH.pkg"
   PKG_DIR="$ROOT/target/pkg/$ARCH"
   rm -rf "$PKG_DIR"
   mkdir -p "$PKG_DIR/root" "$PKG_DIR/resources"
@@ -150,7 +163,8 @@ if [[ "${1:-}" == "--pkg" ]]; then
   # 组件描述里关掉 bundle 重定位：否则机器上别处已有同 bundle id 的 .app（比如 ~/Library 下的开发副本）时，
   # 安装器会把新版装到那里而不是 /Library/Input Methods
   pkgbuild --analyze --root "$PKG_DIR/root" "$PKG_DIR/component.plist" >/dev/null
-  /usr/libexec/PlistBuddy -c "Set :0:BundleIsRelocatable false" "$PKG_DIR/component.plist"
+  /usr/libexec/PlistBuddy -c "Set :0:BundleIsRelocatable false" "$PKG_DIR/component.plist" 2>/dev/null || \
+    /usr/libexec/PlistBuddy -c "Add :0:BundleIsRelocatable bool false" "$PKG_DIR/component.plist"
   pkgbuild --root "$PKG_DIR/root" --component-plist "$PKG_DIR/component.plist" \
     --install-location "/Library/Input Methods" --scripts apps/macos/pkg/scripts \
     --identifier app.qingjian.inputmethod --version "$PKG_VERSION" "$PKG_DIR/$APP_NAME-component.pkg" >/dev/null

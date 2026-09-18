@@ -77,8 +77,9 @@ fn named_pipe_round_trips_the_open_type_loop() {
         .unwrap();
     }
 
+    // 开会话先回一条 `SessionOpened`，之后五个按键各回一条 `KeyResult`。
     let mut last_frame = None;
-    for _ in 0..5 {
+    for _ in 0..6 {
         let message: ServerMessage = read_message(&mut client)
             .expect("read response")
             .expect("server closed early");

@@ -4,6 +4,7 @@ use std::time::Instant;
 
 use qingjian_platform::protocol::SessionId;
 
+use super::launch;
 use super::{RECONNECT_INTERVAL, TextService_Impl};
 use crate::client::EngineClient;
 use crate::client::pipe::connect_default;
@@ -18,16 +19,24 @@ impl TextService_Impl {
             .map_err(|e| e.to_string())
             .and_then(|stream| EngineClient::open(stream, session, app).map_err(|e| e.to_string()));
         match connected {
-            Ok(client) => {
+            Ok((client, input)) => {
                 *self.engine.borrow_mut() = Some(client);
                 self.last_connect_failure.set(None);
                 log("已连上 Server");
+                // 按键行为设置随 `OpenSession` 的回包一起下来（DLL 不读配置文件，AppContainer 里读不到）。
+                self.apply_input_settings(input);
             }
             Err(error) => {
                 self.last_connect_failure.set(Some(Instant::now()));
                 log(&format!(
                     "连 Server 失败（qingjian-server 没起？）: {error}"
                 ));
+                // Server 只在登录时由「启动」文件夹拉起，中途挂了以前只能等下次登录；
+                // 这里自己起一次（进程内冷却 + 跨进程互斥体，不会砸出一串 Server）。
+                if launch::launch_server() {
+                    // 不等 RECONNECT_INTERVAL：Server 一百多毫秒就监听管道，下一键就该连上
+                    self.last_connect_failure.set(None);
+                }
             }
         }
     }

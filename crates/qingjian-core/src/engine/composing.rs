@@ -8,7 +8,11 @@ const MAX_PENDING_PASSTHROUGH: usize = 200;
 impl Engine {
     /// 中文模式下把半角字符转成全角标点；不需要转换返回 `None`。
     pub fn punctuate(&mut self, c: char) -> Option<&'static str> {
-        let converted = self.punctuation.convert(c);
+        let converted = if self.full_width_punctuation {
+            self.punctuation.convert(c)
+        } else {
+            None
+        };
         if let Some(text) = converted {
             self.history.record(text);
             self.remember_commit(LastCommit::plain(text));
@@ -83,10 +87,30 @@ impl Engine {
         });
     }
 
-    /// 双拼方案的键（`xiaohe`），全拼为空；输入日志用。
+    /// 键盘方案的键，输入日志用。全拼为空串（老日志里没有这个字段就是全拼），双拼是 `xiaohe` 这类，
+    /// 注音是 `zhuyin`，只用形码是 `wubi`，**混输是 `<拼音侧>+wubi`**（`pinyin+wubi` / `xiaohe+wubi`）。
+    ///
+    /// 日志里必须能分辨这几种：形码那些行的「拼音」列其实是编码，回放要照着它装配引擎，
+    /// 混输的行两边都要装配。`wubi` 单独出现是「只用形码」，不是「全拼 + 五笔」。
     pub(super) fn scheme_key(&self) -> String {
-        self.shuangpin
-            .map_or_else(String::new, |s| s.key().to_owned())
+        let phonetic = if self.zhuyin {
+            "zhuyin".to_owned()
+        } else {
+            self.shuangpin
+                .map_or_else(String::new, |s| s.key().to_owned())
+        };
+        if self.code.is_none() {
+            return phonetic;
+        }
+        if !self.phonetic {
+            return "wubi".to_owned();
+        }
+        let base = if phonetic.is_empty() {
+            "pinyin"
+        } else {
+            &phonetic
+        };
+        format!("{base}+wubi")
     }
 
     /// 组句里要删东西了：第一次删之前把缓冲区留个快照，上屏时对比最终键串，不同就是一次重打（`retype`）。
@@ -139,7 +163,18 @@ impl Engine {
             self.page_turns = 0;
             self.retype_snapshot = None;
         }
-        self.composition.push(c);
+        // 中文模式下 Shift+字母（配置 `shift_letter = "compose"` 时才收）：按小写进缓冲区参与匹配
+        // （`Cpan` 与 `cpan` 一样出 C盘），原样上屏（回车 / 无候选）时再还原大写。
+        // 缺省关：壳把大写字母直接交给应用，根本进不到这里；英文模式与英文直输段（`no-Way`）始终保留原样。
+        if self.shift_letter_compose
+            && c.is_ascii_uppercase()
+            && !self.english_mode
+            && !self.raw_mode()
+        {
+            self.composition.push_shifted(c);
+        } else {
+            self.composition.push(c);
+        }
     }
 
     pub fn backspace(&mut self) -> bool {
@@ -155,6 +190,7 @@ impl Engine {
         self.retype_snapshot = None;
         self.composition_started = None;
         self.page_turns = 0;
+        self.traditional_map.borrow_mut().clear();
     }
 
     pub fn delete_forward(&mut self) -> bool {
@@ -169,25 +205,28 @@ impl Engine {
         self.note_edit();
         let cursor = self.composition.cursor();
         let before = &self.composition.text()[..cursor];
-        let plain = self.raw_mode() || self.expression_mode() || self.question_mode();
+        let plain =
+            self.raw_mode() || self.expression_mode() || self.question_mode() || self.zhuyin;
         let len = unit_len_before(before, self.shuangpin.is_some(), plain);
         self.composition.delete_before_cursor(len)
     }
 
-    /// 光标往左跳一个音节（壳里 ⌥←），边界与 [`Self::delete_syllable_backward`] 相同。已在开头返回 `false`。
+    /// 光标向左跳过一个音节，遇 `'` 连它一起跳过。光标在开头时返回 `false`。
     pub fn move_cursor_syllable_left(&mut self) -> bool {
         let cursor = self.composition.cursor();
         let before = &self.composition.text()[..cursor];
-        let plain = self.raw_mode() || self.expression_mode() || self.question_mode();
+        let plain =
+            self.raw_mode() || self.expression_mode() || self.question_mode() || self.zhuyin;
         let len = unit_len_before(before, self.shuangpin.is_some(), plain);
         len > 0 && (0..len).all(|_| self.composition.move_left())
     }
 
-    /// 光标往右跳一个音节（壳里 ⌥→）：跳过紧跟的 `'`，再跳过一个音节。已在末尾返回 `false`。
+    /// 光标向右跳过一个音节，遇 `'` 连它一起跳过。光标在末尾时返回 `false`。
     pub fn move_cursor_syllable_right(&mut self) -> bool {
         let cursor = self.composition.cursor();
         let after = &self.composition.text()[cursor..];
-        let plain = self.raw_mode() || self.expression_mode() || self.question_mode();
+        let plain =
+            self.raw_mode() || self.expression_mode() || self.question_mode() || self.zhuyin;
         let len = unit_len_after(after, self.shuangpin.is_some(), plain);
         len > 0 && (0..len).all(|_| self.composition.move_right())
     }
@@ -217,38 +256,63 @@ impl Engine {
 
     /// 是否处在表达式模式（缓冲区以表达式键、缺省 `v` 开头）。此时壳应把数字和运算符也交给 [`Self::push`]，而不是当选词键。
     pub fn expression_mode(&self) -> bool {
-        self.modes().is_expression(self.composition.text())
+        !self.has_custom_phrase()
+            && self
+                .modes()
+                .is_expression(self.composition.text(), self.zhuyin)
     }
 
     /// 英文直输段：缓冲区里有拼音以外的字符（`no-way`），整段原样上屏、不解析拼音。
     /// 表达式模式与问字模式优先于它。
     pub fn raw_mode(&self) -> bool {
-        is_raw(self.composition.text(), self.modes(), self.shuangpin)
+        is_raw(
+            self.composition.text(),
+            self.modes(),
+            self.shuangpin,
+            self.zhuyin,
+        )
     }
 
     /// 是否处在问字模式（缓冲区以问字键、缺省 `u`，或 `?` 开头）：拼音问题由云端答，十六进制码点本地答。
     pub fn question_mode(&self) -> bool {
-        self.modes().is_question(self.composition.text())
+        !self.has_custom_phrase()
+            && self
+                .modes()
+                .is_question(self.composition.text(), self.zhuyin)
     }
 
     /// 问字模式下正在敲的还可能是 Unicode 码点（前缀后为空，或到目前为止全是十六进制 / 开头 `+`）：
     /// 此时壳应把数字交给 [`Self::push`] 而不是当选词键。
     pub fn unicode_entry(&self) -> bool {
         let text = self.composition.text();
-        self.modes().is_question(text)
-            && shortcut::could_be_unicode(self.modes().question_body(text))
+        self.modes().is_question(text, self.zhuyin)
+            && shortcut::could_be_unicode(self.modes().question_body(text, self.zhuyin))
     }
 
-    /// 缓冲区里只有一个 `?`：还没决定是问字还是中文问号。壳在下一个键不是字母时应把它还原成 `？`。
+    /// 缓冲区里只有一个 `?`：还没决定是问字还是标点。壳在确认标点时调用 [`Self::restore_bare_question`]。
     pub fn bare_question(&self) -> bool {
         self.composition.text() == QUESTION_PREFIX.to_string()
+    }
+
+    /// 确认单独的问号并清空缓冲区；中文遵循标点设置，英文原样输出。
+    /// 不是单独的问号时返回 `None`，不改变组句；壳负责取消联想界面并插入返回的文本。
+    pub fn restore_bare_question(&mut self, english: bool) -> Option<String> {
+        if !self.bare_question() {
+            return None;
+        }
+        self.clear();
+        if !english && let Some(mark) = self.punctuate(QUESTION_PREFIX) {
+            return Some(mark.to_owned());
+        }
+        self.note_passthrough(QUESTION_PREFIX);
+        Some(QUESTION_PREFIX.to_string())
     }
 
     /// 用一段完整拼音替换当前缓冲区，供 CLI 和测试一次性喂入。
     pub fn set_input(&mut self, input: &str) {
         self.composition.clear();
         for c in input.chars() {
-            self.composition.push(c);
+            self.push(c);
         }
     }
 
@@ -261,7 +325,14 @@ impl Engine {
             // 缓存里还是「要纠」，清掉让下次重算
             *self.correction_cache.borrow_mut() = None;
         }
-        let raw = self.composition.text().to_owned();
+        let raw = if self.is_zhuyin_mode() && !self.english_mode {
+            self.decode(self.composition.text())
+                .map(|d| d.marked())
+                .unwrap_or_else(|| self.composition.typed_text())
+        } else {
+            // 中文模式下 Shift 敲的大写在这里还原，敲的是什么就上屏什么
+            self.composition.typed_text()
+        };
         if raw.is_empty() {
             // 壳在回车 / 失焦时不管有没有在组句都会来一趟：空的不记日志、不计统计
             self.clear();
@@ -278,6 +349,7 @@ impl Engine {
         }
         self.meter_commit(&raw, InputSource::Raw, english_word);
         self.composition.clear();
+        self.traditional_map.borrow_mut().clear();
         self.remember_commit(LastCommit::plain(&raw));
         self.punctuation.note_committed(&raw);
         self.history.record(&raw);

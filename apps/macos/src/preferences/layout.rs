@@ -19,7 +19,7 @@ pub const LABEL_WIDTH: f64 = 110.0;
 pub const CONTROL_X: f64 = PAGE_PADDING + LABEL_WIDTH + 10.0;
 
 /// 每个标签页的内容宽度。
-pub const PAGE_WIDTH: f64 = 520.0;
+pub const PAGE_WIDTH: f64 = 600.0;
 
 /// 在一页里自上而下摆控件的简易布局：AppKit 坐标原点在左下，先按「离顶部多远」记下来，
 /// 最后知道页高了再一次性换算成 frame。
@@ -27,8 +27,8 @@ pub struct Layout {
     /// 这一页的宽度。
     width: f64,
 
-    /// 已摆的控件及其（x, 顶部距离, 宽, 高）。
-    placed: Vec<(Retained<NSView>, f64, f64, f64, f64)>,
+    /// 已摆的控件及其（x, 顶部距离, 宽, 高, 是否撑到页底）。
+    placed: Vec<(Retained<NSView>, f64, f64, f64, f64, bool)>,
 
     /// 当前行的顶部距离。
     top: f64,
@@ -56,7 +56,13 @@ impl Layout {
     /// 在当前行放一个控件。
     pub fn place(&mut self, view: &NSView, x: f64, width: f64, height: f64) {
         self.placed
-            .push((view.retain(), x, self.top, width, height));
+            .push((view.retain(), x, self.top, width, height, false));
+    }
+
+    /// 在当前行放一个控件，页高定下来后撑到页底（至少 `min_height`）；窗口比这一页高时不留空。
+    pub fn place_fill(&mut self, view: &NSView, x: f64, width: f64, min_height: f64) {
+        self.placed
+            .push((view.retain(), x, self.top, width, min_height, true));
     }
 
     /// 换到下一行。
@@ -76,7 +82,12 @@ impl Layout {
 
     /// 把所有控件加进容器并按容器高度设好 frame（顶部对齐）。
     pub fn finish(self, container: &NSView, total_height: f64) {
-        for (view, x, top, width, height) in self.placed {
+        for (view, x, top, width, height, fill) in self.placed {
+            let height = if fill {
+                (total_height - top - PAGE_PADDING).max(height)
+            } else {
+                height
+            };
             let y = total_height - top - height;
             view.setFrame(NSRect::new(NSPoint::new(x, y), NSSize::new(width, height)));
             container.addSubview(&view);

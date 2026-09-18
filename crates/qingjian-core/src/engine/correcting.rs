@@ -10,6 +10,10 @@ impl Engine {
         if self.shuangpin.is_some() {
             return None;
         }
+        // 形码敲的是字根编码，不是拼音；混输下四码以内可能是编码，超过四码才只剩拼音
+        if self.code.is_some() && (!self.phonetic || scope.len() <= MAX_CODE_LENGTH) {
+            return None;
+        }
         if let Some((cached_scope, cached)) = self.correction_cache.borrow().as_ref()
             && cached_scope == scope
         {
@@ -52,8 +56,10 @@ impl Engine {
         } else {
             None
         };
-        // 每个纠正扣一次编辑的代价，接受过同样的 (敲的, 要的) 音节对越多次扣得越少（个人敲错表）
-        let mut best: Option<(f64, Correction)> = None;
+        // 每个纠正扣一次编辑的代价，接受过同样的 (敲的, 要的) 音节对越多次扣得越少（个人敲错表）。
+        // 相邻换位的折扣只在纠正之间比较时用（`mignti` 换位成 `mingti` 胜过换字母成 `mianti`），
+        // 与原样比时不打这个折：要不要纠的门槛不因编辑类型而降（`zhongwne` 原样说得通就不纠成 中文）
+        let mut best: Option<(f64, f64, Correction)> = None;
         for candidate in candidates {
             // 「删掉刚敲的最后一个字母」不算纠正：用户可能还没敲完，尾巴留着等下一键
             if matches!(candidate.edit, correction::Edit::Delete { index, .. } if index + 1 == scope.len())
@@ -73,12 +79,14 @@ impl Engine {
                 .map_or(0, |(typed, intended)| {
                     self.learner.typo_count(&typed, &intended)
                 });
-            let score = conversion.score - self.typo_costs.correction_cost(accepted);
-            if best.as_ref().is_none_or(|(best, _)| score > *best) {
-                best = Some((score, candidate));
+            let transpose = matches!(candidate.edit, correction::Edit::Transpose { .. });
+            let score = conversion.score - self.typo_costs.correction_cost(transpose, accepted);
+            let undiscounted = conversion.score - self.typo_costs.correction_cost(false, accepted);
+            if best.as_ref().is_none_or(|(best, _, _)| score > *best) {
+                best = Some((score, undiscounted, candidate));
             }
         }
-        let (score, found) = best?;
+        let (_, score, found) = best?;
         if raw_score.is_some_and(|raw| score <= raw) {
             tracing::debug!(
                 original = %found.original,

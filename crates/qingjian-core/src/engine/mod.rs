@@ -8,6 +8,7 @@ mod annotation;
 mod commit;
 mod composing;
 mod correcting;
+mod decoded;
 mod extras;
 mod gloss;
 mod input_log;
@@ -18,6 +19,7 @@ mod prediction;
 mod privacy;
 mod query;
 mod rescoring;
+mod session;
 mod setup;
 mod statistics;
 mod timings;
@@ -27,7 +29,7 @@ mod vocabulary;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use qingjian_dictionary::{Dictionary, Match, WordList};
+use qingjian_dictionary::{CodeTable, Dictionary, Match, WordList};
 
 pub use alignment::Alignment;
 pub use annotation::AnnotationReport;
@@ -46,6 +48,7 @@ pub use prediction::{
 };
 
 pub use query::Query;
+pub use session::EngineSession;
 pub use statistics::{BOOKS, Book, NoUsageMeter, Usage, UsageMeter, UsageSummary, book_scale};
 pub use timings::Timings;
 pub use translator::{NoTranslator, Translator};
@@ -53,7 +56,7 @@ pub use vocabulary::{
     FRESH_UNTIL, LevelCount, NoVocabularyTracker, VocabularySummary, VocabularyTracker,
 };
 
-use crate::candidate::{Candidate, CandidateKind, CandidateList, Language, Translation};
+use crate::candidate::{Candidate, CandidateKind, CandidateList, Language};
 use crate::composition::Composition;
 use crate::correction::{self, Correction, TypoCosts, typo};
 use crate::emoji::EmojiTable;
@@ -67,7 +70,7 @@ use crate::sentence::{
     self, Conversion, Interpolation, LanguageModel, NoLanguageModel, Personal, SentenceScorer,
 };
 use crate::shortcut;
-use crate::shuangpin::{Decoded, Scheme};
+use crate::shuangpin::Scheme;
 
 use commit::CommitChain;
 
@@ -103,6 +106,19 @@ pub struct Engine {
 
     /// 全角标点与引号配对状态。
     punctuation: Punctuation,
+
+    /// 中文标点转换开关。
+    full_width_punctuation: bool,
+
+    /// 用户定义的固定位置文本。
+    custom_phrases: Vec<crate::CustomPhrase>,
+
+    /// 中英混输时中文候选总在英文词前面（缺省关：拼音不像话的输入英文词排第一，常在中文模式里打英文词的人靠它）。
+    chinese_first: bool,
+
+    /// 中文模式下 Shift+字母进组句缓冲区（配置 `[general] shift_letter = "compose"`，缺省关）。
+    /// 关着由壳直接把大写字母交给应用，Core 这一路就不该收——否则 `Cpan` 这种会被当成拼音。
+    shift_letter_compose: bool,
 
     /// 联想提供方，缺省为 [`NoPredictor`]。
     predictor: Box<dyn Predictor>,
@@ -219,9 +235,33 @@ pub struct Engine {
     /// 双拼方案，`None` 为全拼。开着时缓冲区里是双拼键，查词前先解成全拼（见 [`crate::shuangpin`]）。
     shuangpin: Option<Scheme>,
 
+    /// 注音模式开关，開著時緩衝區裡是注音大千鍵位，查詞前先解成拼音（見 [`crate::zhuyin`]）。
+    zhuyin: bool,
+
+    /// 形码码表（五笔）。`Some` 时编码参与查询，按前缀查表（见 [`Engine::query_code`]）。
+    code: Option<CodeTable>,
+
+    /// 拼音侧（全拼 / 双拼 / 注音）参不参与查询，缺省参与。
+    ///
+    /// 与 `code` 组合出三种情形：只有拼音（形码关）、只有形码（拼音关，`[general] scheme = "none"`）、
+    /// **两边都开 = 混输**（编码打全的形码候选在前，见 [`Engine::query_mixed`]）。两个都关着时按拼音走。
+    phonetic: bool,
+
     /// emoji 表，没有就不出 emoji 候选。
     emoji: Option<EmojiTable>,
+
+    /// 繁体输出模式。
+    traditional: bool,
+
+    /// 繁体转换器。
+    opencc: Option<ferrous_opencc::OpenCC>,
+
+    /// 繁体输出时「繁体 → 原简体」的映射，组句结束清空；学习、译词、撤销都按简体原文走。
+    traditional_map: std::cell::RefCell<HashMap<String, String>>,
 }
+
+/// 形码编码最长几位（五笔四码）：混输下超过它的输入只可能是拼音。
+const MAX_CODE_LENGTH: usize = 4;
 
 /// 英文补全最多几条（`compa` → company / compare / …）。
 const ENGLISH_COMPLETIONS: usize = 3;
@@ -306,6 +346,10 @@ impl Engine {
             english: None,
             english_mode: false,
             punctuation: Punctuation::default(),
+            full_width_punctuation: true,
+            custom_phrases: Vec::new(),
+            chinese_first: false,
+            shift_letter_compose: false,
             predictor: Box::new(NoPredictor),
             language_model: Box::new(NoLanguageModel),
             sentence_scorer: None,
@@ -344,21 +388,33 @@ impl Engine {
             chain: CommitChain::default(),
             fuzzy: FuzzyRules::default(),
             shuangpin: None,
+            zhuyin: false,
+            code: None,
+            phonetic: true,
             emoji: None,
+            traditional: false,
+            opencc: None,
+            traditional_map: std::cell::RefCell::new(HashMap::new()),
         }
     }
 }
 
 /// 缓冲区是否是英文直输段：含拼音键与 `'` 以外的字符（`no-way`、`a.b`），且不是表达式 / 问字模式。
 /// 微软 / 搜狗双拼下 `;` 也是拼音键。
-fn is_raw(text: &str, modes: ModeKeys, shuangpin: Option<Scheme>) -> bool {
-    let is_key = |c: char| match shuangpin {
-        Some(scheme) => scheme.is_key(c),
-        None => c.is_ascii_lowercase(),
+fn is_raw(text: &str, modes: ModeKeys, shuangpin: Option<Scheme>, zhuyin: bool) -> bool {
+    let is_key = |c: char| {
+        if zhuyin {
+            crate::zhuyin::layout::map_key(c).is_some() || c == ' '
+        } else {
+            match shuangpin {
+                Some(scheme) => scheme.is_key(c),
+                None => c.is_ascii_lowercase(),
+            }
+        }
     };
     !text.is_empty()
-        && !modes.is_expression(text)
-        && !modes.is_question(text)
+        && !modes.is_expression(text, zhuyin)
+        && !modes.is_question(text, zhuyin)
         && text.chars().any(|c| !(is_key(c) || c == '\''))
 }
 

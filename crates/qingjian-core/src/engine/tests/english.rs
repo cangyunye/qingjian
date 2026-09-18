@@ -4,7 +4,11 @@ use super::*;
 
 #[test]
 fn english_word_ranks_first_when_input_is_unlikely_pinyin() {
-    let words = WordList::parse("hello\nchina\nGitHub\tgithub\n").unwrap();
+    // 词频是 Zipf×1000，与产品 english.tsv 同一尺度
+    let words = WordList::parse(
+        "hello\thello\t4720\nchina\tchina\t5100\nGitHub\tgithub\t3180\nkey\tkey\t5120\n",
+    )
+    .unwrap();
     let mut engine = engine().with_english(words);
 
     engine.set_input("hello"); // he l… l… o：中间有声母缩写
@@ -64,7 +68,7 @@ fn usage_meter_counts_hanzi_words_and_english_words_per_commit() {
 fn english_word_yields_to_a_chinese_word_the_user_keeps_choosing() {
     let dictionary = Dictionary::parse("可以\tke yi\t9000\n客运\tke yun\t100\n").unwrap();
     let mut engine = Engine::new(dictionary)
-        .with_english(WordList::parse("key\n").unwrap())
+        .with_english(WordList::parse("key\tkey\t5120\n").unwrap())
         .with_learner(Box::new(CountingLearner(HashMap::new())));
     let first_two = |engine: &Engine| {
         let all = texts_of(engine);
@@ -82,7 +86,12 @@ fn english_word_yields_to_a_chinese_word_the_user_keeps_choosing() {
             .unwrap();
         engine.commit(&candidate);
     };
-    // ke'y 末尾落单一个字母，拼音不像话：英文词在前
+    // 开了中文优先：ke'y 再不像话，中文词也在前、英文第二
+    engine.set_chinese_first(true);
+    engine.set_input("key");
+    assert_eq!(first_two(&engine), ("可以".into(), "key".into()));
+    // 缺省关：末尾落单一个字母、拼音不像话，英文词在前
+    engine.set_chinese_first(false);
     engine.set_input("key");
     assert_eq!(first_two(&engine), ("key".into(), "可以".into()));
     // 这段字母下选过一次 可以：中文在前，英文退到第二
@@ -94,6 +103,70 @@ fn english_word_yields_to_a_chinese_word_the_user_keeps_choosing() {
     pick(&mut engine, "key");
     engine.set_input("key");
     assert_eq!(first_two(&engine), ("key".into(), "可以".into()));
+}
+
+#[test]
+fn short_all_caps_acronym_yields_to_chinese() {
+    // `mp` 整段只有两个字母、英文写法又是全大写缩写（MP）：几乎总是在打 门票，让中文先，
+    // 英文词仍在候选里只是退到后面。超过两个字母的正文英文（hello / cargo）不受这条影响——
+    // 曾经试过按词频一刀切，冻结日志回放实测英文首选从 82.5% 掉到 50.9%，cargo / rust 全被整句挤掉。
+    let dictionary = Dictionary::parse("门票\tmen piao\t5000\n买票\tmai piao\t3000\n").unwrap();
+    let words = WordList::parse("MP\tmp\t4290\nhello\thello\t4720\ncargo\tcargo\t5000\n").unwrap();
+    let mut engine = Engine::new(dictionary).with_english(words);
+
+    engine.set_input("mp");
+    let all = texts_of(&engine);
+    assert_eq!(all[0], "门票");
+    assert!(
+        all.iter().any(|t| t == "MP"),
+        "英文词仍在候选里，只是让到后面"
+    );
+    assert!(all.iter().position(|t| t == "MP").unwrap() > 0);
+
+    // 三个字母以上的正文英文：拼音不像话时照旧排第一
+    engine.set_input("hello");
+    assert_eq!(texts_of(&engine)[0], "hello");
+    engine.set_input("cargo");
+    assert_eq!(texts_of(&engine)[0], "cargo");
+}
+
+#[test]
+fn learned_english_word_keeps_first_place_over_the_two_letter_acronym_rule() {
+    // `ok` / `pc` / `ll` 同样满足「两个字母的全大写缩写」，一刀切会把它们一起翻成中文；
+    // 而用户**选过**的英文词要照旧排第一 —— 选过 OK，下次敲 `ok` 就该还是 OK 在前。
+    let dictionary = Dictionary::parse("哦\to\t5000\n门票\tmen piao\t5000\n").unwrap();
+    let words = WordList::parse("OK\tok\t5140\nMP\tmp\t4290\n").unwrap();
+    let mut engine = Engine::new(dictionary)
+        .with_english(words)
+        .with_learner(Box::new(CountingLearner(HashMap::new())));
+    let pick = |engine: &mut Engine, input: &str, text: &str| {
+        engine.set_input(input);
+        let candidate = engine
+            .query()
+            .unwrap()
+            .candidates
+            .items
+            .into_iter()
+            .find(|c| c.text == text)
+            .unwrap();
+        engine.commit(&candidate);
+    };
+
+    // 没选过时规则照旧生效：两个字母的全大写缩写让中文先。
+    engine.set_input("mp");
+    assert_eq!(texts_of(&engine)[0], "门票");
+    engine.set_input("ok");
+    assert_eq!(texts_of(&engine)[0], "哦");
+
+    // 选过一次 OK：规则不再压过学习记录，`ok` 回到英文第一。
+    pick(&mut engine, "ok", "OK");
+    engine.set_input("ok");
+    assert_eq!(texts_of(&engine)[0], "OK");
+
+    // `mp` 同理：选过 MP 之后它也从中文切回英文第一。
+    pick(&mut engine, "mp", "MP");
+    engine.set_input("mp");
+    assert_eq!(texts_of(&engine)[0], "MP");
 }
 
 #[test]
@@ -124,8 +197,9 @@ fn hyphen_turns_the_buffer_into_a_raw_english_segment() {
 
 #[test]
 fn english_completions_appear_when_pinyin_is_unlikely() {
+    // Zipf×1000：company 5.6 / compare 4.45 / compass 3.74 都过补全门槛 3.5
     let words = WordList::parse(
-            "company\tcompany\t900\ncompare\tcompare\t500\ncompass\tcompass\t300\ncomma\tcomma\t100\nxian\txian\t50\nxiangkai\txiangkai\t10\n",
+            "company\tcompany\t5600\ncompare\tcompare\t4450\ncompass\tcompass\t3740\ncomma\tcomma\t2900\nxian\txian\t4500\nxiangkai\txiangkai\t10\n",
         )
         .unwrap();
     let mut engine = engine().with_english(words);
@@ -143,7 +217,7 @@ fn english_completions_appear_when_pinyin_is_unlikely() {
     // 第一个字母就切不动的（i 不是任何音节的开头）也要出补全
     engine.set_input("impo");
     assert!(engine.query().is_err());
-    let words = WordList::parse("important\timportant\t900\nimport\timport\t800\n").unwrap();
+    let words = WordList::parse("important\timportant\t4800\nimport\timport\t4600\n").unwrap();
     let mut fresh = Engine::new(Dictionary::parse(SAMPLE).unwrap()).with_english(words);
     fresh.set_input("impo");
     assert_eq!(texts_of(&fresh), ["important", "import"]);

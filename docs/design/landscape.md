@@ -41,6 +41,7 @@
 | 词汇等级（统计） | 已用：CEFR-J Wordlist 1.5（A1–B2，免费须署名）+ Octanove C1/C2（CC BY-SA 4.0）；JLPT N5–N1（Tanos CC BY，经 elzup MIT 整理）。四六级 / 商务英语词表在 GitHub 上只有大纲词汇的转录、许可不明，没用 | 已核 | 「统计」页按级数见过 / 看熟 / 上屏过的译词（`assets/levels/`）；也可做英→中 / 日→中方向的种子；不进候选窗口 |
 | emoji | Unicode CLDR 中文与英文 annotations（`cldr-json` 的 `annotations/{zh,en}`、`annotationsDerived/{zh,en}`） | Unicode License v3（宽松，需保留版权声明） | `dict-convert emoji --language zh\|en` → `assets/emoji/emoji-{zh,en}.tsv`，随仓库与发布包提供；许可文本在 `assets/emoji/LICENSE-unicode.txt`。日文表要等有日语输入模式 |
 | 英文词频 | wordfreq（Python 包） | 代码 MIT，数据 CC-BY-SA 等 | 只取每个词的 Zipf 频率数字给英文补全排序，`tools/corpus/english_frequency.py` 生成 `english-frequency.tsv`（gitignore） |
+| 形码码表（五笔） | [sxjudya/rime-wubi86-jidian](https://github.com/sxjudya/rime-wubi86-jidian) 的 `wubi86_jidian.dict.yaml`（86 五笔极点码表） | Apache-2.0 | `dict-convert wubi` → `assets/wubi/wubi86.tsv`（8.9 万条）。**码表自带的权重不用**（那是码表顺序不是语料词频），词频按词面从青简词库回填，与拼音方案同一把尺子。上游另有 `_extra` / `_extra_district` 两张扩展表，暂未并入 |
 
 ## 许可策略
 
@@ -54,3 +55,19 @@
   但对 CC-CEDICT 做的任何加工（裁剪、合并 gloss）都要以 CC BY-SA 发布。
 - 每新增一个数据源或依赖，同步更新上表和 README 的 License 一节。
 - GPL 项目（水杉、部分 Rime 前端）的代码只能读不能搬。
+
+## 随包数据清单
+
+产品包里带的数据与各自的许可（偏好设置「关于」页列的就是这份）：
+
+| 数据 | 来源与许可 |
+|---|---|
+| 词库 | 通用规范汉字表；现代汉语常用词表（liuxilu 校对版）；THUOCL 领域词（清华大学自然语言处理实验室，MIT）；读音取自 Unihan（Unicode License v3） |
+| 语言模型 | 中文维基百科（CC BY-SA 4.0）与 LCCC（清华大学 CoAI，MIT）语料统计 |
+| 释义表 | 由大语言模型（DeepSeek）离线生成，青简自建 |
+| emoji | Unicode CLDR annotations（Unicode License v3） |
+| 英文词表 | ESDB / SCOWL（© Kevin Atkinson，按其许可保留版权声明）；CSpell 词典（MIT） |
+| 词汇等级 | The CEFR-J Wordlist Version 1.5（Yukio Tono，Tokyo University of Foreign Studies，[cefr-j.org](http://www.cefr-j.org/download.html)）；Octanove Vocabulary Profile C1/C2（CC BY-SA 4.0）；JLPT 词表（[tanos.co.uk](http://www.tanos.co.uk/jlpt/)，CC BY；经 elzup/jlpt-word-list 整理，MIT） |
+| 五笔码表 | 86 五笔极点码表（[sxjudya/rime-wubi86-jidian](https://github.com/sxjudya/rime-wubi86-jidian)，Apache-2.0）；编码来自上游，词频由青简词库按词面回填 |
+
+各许可证原文在 `assets/` 对应目录下。雾凇拼音（GPL）已彻底移除，不要再引入。

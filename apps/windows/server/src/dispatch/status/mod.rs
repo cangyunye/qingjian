@@ -7,7 +7,7 @@ mod event;
 mod sink;
 mod view;
 
-use qingjian_platform::Config;
+use qingjian_platform::{Config, Scheme, scheme_label};
 
 pub use self::event::StatusEvent;
 pub use self::sink::{NoopStatusSink, StatusSink};
@@ -34,6 +34,11 @@ impl Router {
     pub fn handle_status_event(&mut self, event: StatusEvent) {
         match event {
             StatusEvent::ToggleMode => {
+                // 关掉内置英文模式后这一格不切模式：DLL 那边也会拦（配置改了没切走再切回时两边都挡住）
+                if !self.config.english_mode {
+                    tracing::debug!("内置英文模式已关闭，状态条不切模式");
+                    return;
+                }
                 let Some(english) = self.status_mode else {
                     return;
                 };
@@ -90,10 +95,10 @@ impl Router {
             Some(english) if self.config.status_enabled => {
                 self.status.show_status(StatusView {
                     english,
-                    scheme: self
-                        .config
-                        .shuangpin
-                        .map(|scheme| scheme.label().to_owned()),
+                    zhuyin: self.config.scheme == Scheme::Zhuyin,
+                    // 现算，不存下来：存了会与 scheme / wubi 冗余、手搓配置的地方就漂移
+                    scheme: Some(scheme_label(self.config.scheme, self.config.wubi))
+                        .filter(|label| !label.is_empty()),
                     full_width: self.full_width_for(english),
                     theme: self.config.theme,
                     anchor: self.config.status_pos,

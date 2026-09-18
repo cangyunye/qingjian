@@ -15,9 +15,12 @@ if [[ -n "$staged_rs" ]]; then
 fi
 
 cargo fmt --all --check
-# macOS 壳（objc2）只能在 Apple 平台编译：其它平台的全量 lint 排除它（CI 在 mac runner 上单独跑它）
-excludes=()
-if [[ "$(uname -s)" != "Darwin" ]]; then
-  excludes+=(--exclude qingjian-macos)
-fi
-cargo clippy --workspace "${excludes[@]}" --all-targets -- -D warnings
+
+# clippy 要按平台排除编不了的壳，划分与 ci.yml 的三个 job 一致。
+# IMK 壳依赖 objc2，非 Apple 平台上是硬 compile_error!，排除不掉就只能整条命令失败；
+# 其余平台排除它之后，Windows 三件套在本机也编得过（已在 Windows 上验过）。
+case "$(uname -s)" in
+  Darwin) clippy_scope=(--workspace) ;;
+  *) clippy_scope=(--workspace --exclude qingjian-macos) ;;
+esac
+cargo clippy "${clippy_scope[@]}" --all-targets -- -D warnings

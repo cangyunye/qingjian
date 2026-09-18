@@ -2,6 +2,7 @@
 
 use super::*;
 
+mod code;
 mod english_tail;
 mod result;
 mod snapshot;
@@ -9,6 +10,7 @@ mod snapshot;
 pub(crate) use english_tail::EnglishTail;
 pub use result::Query;
 pub(super) use result::join_marked;
+pub(super) use result::join_marked_typed;
 pub(super) use snapshot::QuerySnapshot;
 
 impl Engine {
@@ -18,7 +20,26 @@ impl Engine {
     /// 上屏之后接着组句；见 [`Composition::scope`]。
     pub fn query(&self) -> Result<Query, ParseError> {
         self.last_rescored.set(false);
-        let query = self.query_inner()?;
+        let mut query = match self.query_inner() {
+            Ok(query) => query,
+            Err(error) => {
+                if !self
+                    .custom_phrases
+                    .iter()
+                    .any(|p| p.enabled && p.code == self.composition.scope())
+                {
+                    return Err(error);
+                }
+                Query::custom_only(
+                    self.composition.text(),
+                    self.composition.cursor(),
+                    self.shuangpin.is_some() || self.zhuyin,
+                    self.composition.scope(),
+                    self.marked_rest(self.composition.rest()),
+                )
+            }
+        };
+        self.insert_custom_phrases(&mut query.candidates.items);
         // 给输入日志留个摘要：上屏时才知道选了什么，这里才知道看到了什么
         let pinyin = match &query.correction {
             Some(correction) => correction.segmentation.joined("'"),
@@ -37,6 +58,24 @@ impl Engine {
                 .collect(),
             rescored: self.last_rescored.get(),
         });
+
+        if self.traditional
+            && let Some(opencc) = &self.opencc
+        {
+            for candidate in &mut query.candidates.items {
+                if matches!(
+                    candidate.kind,
+                    CandidateKind::Chinese | CandidateKind::Sentence | CandidateKind::Cloud
+                ) {
+                    let traditional_text = opencc.convert(&candidate.text);
+                    self.traditional_map
+                        .borrow_mut()
+                        .insert(traditional_text.clone(), candidate.text.clone());
+                    candidate.text = traditional_text;
+                }
+            }
+        }
+
         Ok(query)
     }
 
@@ -47,15 +86,33 @@ impl Engine {
         if self.english_mode {
             return Ok(self.query_english(keys, rest, start));
         }
-        if self.modes().is_expression(keys) {
+        if self.modes().is_expression(keys, self.zhuyin) {
             return Ok(self.query_expression(keys, rest, start));
         }
-        if self.modes().is_question(keys) {
+        if self.modes().is_question(keys, self.zhuyin) {
             return Ok(self.query_question(keys, rest, start));
         }
-        if is_raw(keys, self.modes(), self.shuangpin) {
+        if is_raw(keys, self.modes(), self.shuangpin, self.zhuyin) {
             return Ok(self.query_raw(keys, rest, start));
         }
+        // 形码与拼音是两条平行的管线，在进切分之前分岔。放在这里是为了让 `?` 问字与
+        // `-` 直输段仍然先分派出去：形码下 `v` / `u` / `i` 是字根键，模式键已由 `modes()` 让位。
+        match self.code.is_some() {
+            // 只用形码：拼音侧整个不走（`[general] scheme = "none"`）
+            true if !self.phonetic => Ok(self.query_code(keys, rest, start)),
+            // 混输：两边都出候选
+            true => self.query_mixed(keys, rest, start),
+            false => self.query_phonetic(keys, rest, start),
+        }
+    }
+
+    /// 拼音侧（全拼 / 双拼 / 注音）的候选生成：整段作用域是一串读音。
+    fn query_phonetic(
+        &self,
+        keys: &str,
+        rest: String,
+        start: Instant,
+    ) -> Result<Query, ParseError> {
         // 双拼先解成全拼（音节间已用 `'` 连好，切分没有歧义），之后与全拼同路；解不动的键当尾巴
         let decoded = self.decode(keys);
         let scope: &str = decoded.as_ref().map_or(keys, |d| d.pinyin());
@@ -97,7 +154,8 @@ impl Engine {
                     text: self.composition.text().to_owned(),
                     cursor: self.composition.cursor(),
                     rest,
-                    shuangpin: self.shuangpin.is_some(),
+                    decoded_keys: self.shuangpin.is_some() || self.zhuyin,
+                    typed_display: decoded.as_ref().map(|d| d.marked()),
                     correction: None,
                     timings: Timings {
                         parse: start.elapsed(),
@@ -142,8 +200,8 @@ impl Engine {
             let hits = self.lookup_all(&positions);
             scored.reserve(hits.len());
             for hit in hits {
-                let full_last =
-                    last.complete && hit.syllables().nth(count - 1) == Some(last.text.as_str());
+                let full_last = last.complete
+                    && hit.syllables().nth(count - 1) == Some(patterns[count - 1].text);
                 scored.push(Scored {
                     hit,
                     full_last,
@@ -155,9 +213,7 @@ impl Engine {
             }
             // 输入的前缀也出候选（`kaifazhe` → 开发、开），否则长句没法逐词上屏。
             // 只收音节数正好等于前缀长度的词，更长的词会与输入后面的音节冲突。
-            let patterns = segmentation.patterns();
-            let expanded = self.fuzzy.expand(&patterns);
-            let positions = expanded.positions();
+            // 前缀不含最后一个位置，因此可复用上面的扩展结果。
             for prefix_len in (1..count).rev() {
                 let prefix = &patterns[..prefix_len];
                 let prefix_letters: usize = prefix.iter().map(|p| p.text.len()).sum();
@@ -217,16 +273,28 @@ impl Engine {
                 translation: None,
             })
             .collect();
-        self.insert_english(&mut items, unlikely);
+        // 中文优先：整句先进去占第一，英文词紧跟其后（第二）；关掉时英文词先进、整句排在开头的英文后面
+        if self.chinese_first {
+            self.insert_sentence(
+                &mut items,
+                &segmentations,
+                correction.is_none(),
+                english_tail.as_ref().filter(|_| correction.is_none()),
+                head_wins,
+            );
+            self.insert_english(&mut items, unlikely);
+        } else {
+            self.insert_english(&mut items, unlikely);
+            self.insert_sentence(
+                &mut items,
+                &segmentations,
+                correction.is_none(),
+                english_tail.as_ref().filter(|_| correction.is_none()),
+                head_wins,
+            );
+        }
         // 快捷候选按敲的键认（`rq` 日期），双拼下也是
         self.insert_shortcuts(&mut items, keys);
-        self.insert_sentence(
-            &mut items,
-            &segmentations,
-            correction.is_none(),
-            english_tail.as_ref().filter(|_| correction.is_none()),
-            head_wins,
-        );
         self.insert_emoji(&mut items);
         let rank = start.elapsed();
 
@@ -235,6 +303,11 @@ impl Engine {
             .as_ref()
             .filter(|_| head_wins)
             .map_or(tail, |t| &keys[t.head_len..]);
+        let typed_display = decoded.as_ref().map(|d| d.marked()).or_else(|| {
+            // 中文模式下 Shift 敲的大写：匹配按小写算，拼音行仍按敲的样子显示（`Cpan`）
+            (correction.is_none() && self.composition.has_shifted())
+                .then(|| join_marked_typed(&self.composition.typed_scope(), &segmentations, tail))
+        });
         Ok(Query {
             segmentations,
             candidates: CandidateList { items },
@@ -242,7 +315,8 @@ impl Engine {
             text: self.composition.text().to_owned(),
             cursor: self.composition.cursor(),
             rest,
-            shuangpin: self.shuangpin.is_some(),
+            decoded_keys: self.shuangpin.is_some() || self.zhuyin,
+            typed_display,
             correction,
             timings: Timings {
                 parse,
@@ -272,7 +346,8 @@ impl Engine {
             text: self.composition.text().to_owned(),
             cursor: self.composition.cursor(),
             rest,
-            shuangpin: self.shuangpin.is_some(),
+            decoded_keys: self.shuangpin.is_some() || self.zhuyin,
+            typed_display: None,
             correction: None,
             timings: Timings {
                 parse: Duration::ZERO,
@@ -298,7 +373,8 @@ impl Engine {
             text: self.composition.text().to_owned(),
             cursor: self.composition.cursor(),
             rest,
-            shuangpin: self.shuangpin.is_some(),
+            decoded_keys: self.shuangpin.is_some() || self.zhuyin,
+            typed_display: None,
             correction: None,
             timings: Timings {
                 parse: Duration::ZERO,
@@ -335,7 +411,8 @@ impl Engine {
             text: self.composition.text().to_owned(),
             cursor: self.composition.cursor(),
             rest,
-            shuangpin: self.shuangpin.is_some(),
+            decoded_keys: self.shuangpin.is_some() || self.zhuyin,
+            typed_display: None,
             correction: None,
             timings: Timings {
                 parse: Duration::ZERO,
@@ -348,7 +425,7 @@ impl Engine {
     /// 问字模式（问字键或 `?` 开头）：拼音问题本地没有候选，preedit 显示前缀加切分好的问题拼音，答案等云端；
     /// 十六进制码点（`u4e00`、`u+1f600`）本地直接给出那个字符。
     pub(super) fn query_question(&self, scope: &str, rest: String, start: Instant) -> Query {
-        let body = self.modes().question_body(scope);
+        let body = self.modes().question_body(scope, self.zhuyin);
         let prefix = &scope[..scope.len() - body.len()];
         let (candidates, tail) = match shortcut::unicode_form(body) {
             Some(text) => (
@@ -375,7 +452,8 @@ impl Engine {
             text: self.composition.text().to_owned(),
             cursor: self.composition.cursor(),
             rest,
-            shuangpin: self.shuangpin.is_some(),
+            decoded_keys: self.shuangpin.is_some() || self.zhuyin,
+            typed_display: None,
             correction: None,
             timings: Timings {
                 parse: start.elapsed(),

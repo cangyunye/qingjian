@@ -8,7 +8,11 @@ use crate::panel::controls::{field, index_of, page};
 use crate::panel::{Message, Settings};
 
 /// 翻页键对：界面名 + 配置写法。
-pub(crate) const PAGE_KEYS: [(&str, &str); 2] = [("方括号 [ ]", "[]"), ("逗号句号 , .", ",.")];
+pub(crate) const PAGE_KEYS: [(&str, &str); 3] = [
+    ("方括号 [ ]", "[]"),
+    ("逗号句号 , .", ",."),
+    ("减号等号 - =", "-="),
+];
 
 /// 可当模式键的字母（与 Core `ModeKeys::CANDIDATES` 一致）。
 pub(crate) const MODE_KEYS: [&str; 3] = ["v", "u", "i"];
@@ -51,7 +55,7 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
     let rows = [
         field(
             "翻页键",
-            "选「, .」时组句中敲逗号句号是翻页，不再是上屏加标点。",
+            "选「, .」或「- =」时组句中敲对应符号是翻页，不再是上屏加标点。",
             ComboBox::new()
                 .items_source(PAGE_KEYS.iter().map(|(label, _)| *label))
                 .selected_index(index_of(&PAGE_KEYS, &settings.config.general.page_keys))
@@ -64,8 +68,15 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
         ),
         field(
             "问字模式键",
-            "这两个字母开头进模式：v1+2 出 3，usangemu 问「三个木」（需要云服务）；? 开头永远是问字。两个键不能相同。",
+            "这两个字母开头进模式：v1+2 出 3，usangemu 问「三个木」（需要云服务）。两个键不能相同。",
             mode_combo(s.mode.question, context.callback(Message::ModeQuestion)),
+        ),
+        field(
+            "没在输入拼音时敲 ? 也进入问字",
+            "开着时 ? 先进问字（中英文模式都行），后面跟字母才是问题，跟其他键时还原成问号；关着问号就是问号。",
+            ToggleSwitch::new()
+                .is_on(s.mode.question_mark)
+                .on_toggled(context.callback(Message::QuestionMark)),
         ),
         field(
             "译词上屏（第一个）",

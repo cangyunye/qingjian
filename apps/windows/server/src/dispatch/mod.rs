@@ -1,9 +1,10 @@
 //! 协议分派：把 DLL 发来的 [`ClientMessage`] 交给 Engine，产出回给 DLL 的 [`ServerMessage`]。
 //! 消息分派在 [`message`]，会话在 [`session`]，组句展示状态在 [`composed`]，按键在 [`key`]，
-//! 候选窗口输出在 [`candidates`]，状态条在 [`status`]，翻译选中文字在 [`translate`]，朗读译文在 [`speak`]，
-//! 配置热加载在 [`reload`]，本地整句模型在 [`rescore`]。
+//! 候选窗口输出在 [`candidates`]，状态条在 [`status`]，翻译选中文字在 [`translate`]，配置热加载在 [`reload`]，
+//! 本地整句模型在 [`rescore`]，形码码表在 [`code`]。
 
 mod candidates;
+mod code;
 mod composed;
 mod config;
 mod key;
@@ -16,15 +17,18 @@ mod status;
 mod translate;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::mpsc::Sender;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use qingjian_core::Engine;
 use qingjian_platform::LocalModelConfig;
-use qingjian_platform::protocol::{ClientMessage, Frame, ScreenRect, ServerMessage, SessionId};
+use qingjian_platform::protocol::{
+    ClientMessage, Frame, InputSettings, ScreenRect, ServerMessage, SessionId,
+};
 
-pub use self::candidates::{CandidateSink, NoopSink};
+pub use self::candidates::{CandidateSink, NoopSink, RenderSettings};
+pub use self::code::find_code_table;
 use self::composed::Composed;
 pub use self::config::RouterConfig;
 use self::reload::ConfigReload;
@@ -54,12 +58,6 @@ pub struct Router {
     /// 当前持有组句的会话。
     focused: Option<SessionId>,
 
-    /// 当前组句的展示状态；没在组句时为 `None`。
-    composed: Option<Composed>,
-
-    /// 「翻译选中文字」进行态；与 `composed` 互斥。
-    translation: Option<Translation>,
-
     /// 「朗读译文」进行态；与 `composed` / `translation` 互斥。
     speak: Option<SpeakJob>,
 
@@ -68,6 +66,12 @@ pub struct Router {
 
     /// 最近上屏的文本拼接（「朗读译文」的素材）；私密输入不记，容量见 [`speak`]。
     committed: String,
+
+    /// 当前组句的展示状态；没在组句时为 `None`。
+    composed: Option<Composed>,
+
+    /// 「翻译选中文字」进行态；与 `composed` 互斥。
+    translation: Option<Translation>,
 
     /// 已发出、等 DLL 回选区的请求号；对不上的 `Selection` 丢弃。
     pending_selection: Option<u64>,
@@ -84,7 +88,7 @@ pub struct Router {
     /// 当前高亮候选在布局里的下标（跨页）。
     highlight: usize,
 
-    /// 这轮查询里动过高亮：英文模式空格只在动过之后才选高亮词。
+    /// 这轮查询里动过高亮：动过就不再拿重排结果换掉候选；注音模式数字键动过之后才选词。
     navigated: bool,
 
     /// 上次把学习数据落盘的时间。
@@ -118,6 +122,9 @@ pub struct Router {
     /// 本地整句模型（`.qjm` 或三件套目录）；没有模型文件为 `None`。
     model_path: Option<PathBuf>,
 
+    /// 形码码表（`wubi/wubi86.tsv`，启动时找好的，见 [`code::find_code_table`]）；没有为 `None`。
+    code_table: Option<PathBuf>,
+
     /// 进行中的模型加载；加载完接到 Engine 上就清掉。
     model_loader: Option<ModelLoader>,
 
@@ -140,9 +147,6 @@ impl Router {
             focused: None,
             composed: None,
             translation: None,
-            speak: None,
-            speech: None,
-            committed: String::new(),
             pending_selection: None,
             selection_seq: 0,
             sentence: None,
@@ -155,18 +159,38 @@ impl Router {
             status: Box::new(NoopStatusSink),
             status_mode: None,
             pending_mode: None,
+            speak: None,
+            speech: None,
+            committed: String::new(),
             last_rect: None,
             last_caret: None,
             last_shown: None,
             model_path: None,
+            code_table: None,
             model_loader: None,
             applied_model: LocalModelConfig::default(),
             rescore: RescoreState::default(),
         }
     }
 
+    /// 下发给 DLL 的按键行为设置：`OpenSession` 的回包带一次，之后每拍 `SyncMode` 也跟着走，
+    /// 所以 DLL 不用自己读配置文件，配置改了也不用重开会话。
+    pub(super) fn input_settings(&self) -> InputSettings {
+        InputSettings {
+            switch_mode: self.config.switch_mode,
+            english_mode: self.config.english_mode,
+            shift_letter_compose: self.config.shift_letter_compose,
+        }
+    }
+
     pub fn set_candidate_sink(&mut self, sink: Box<dyn CandidateSink>) {
+        sink.configure(self.config.render_settings());
         self.candidates = sink;
+    }
+
+    /// 直接碰 Engine：测试里改模式键这类启动时才设的开关。
+    pub fn engine_mut(&mut self) -> &mut Engine {
+        &mut self.engine
     }
 
     pub fn set_status_sink(&mut self, sink: Box<dyn StatusSink>) {

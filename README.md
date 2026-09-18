@@ -26,6 +26,12 @@ https://github.com/user-attachments/assets/d145fde9-a641-4543-8b15-dd7a2685de3d
 
 **一次只学习一种语言。** 青简不会在一个候选项旁边同时塞入英语、日语、韩语、德语。保持输入体验干净，比堆砌信息更重要。
 
+- 官网：[qingjian.app](https://qingjian.app)
+- 下载：[qingjian.app/download](https://qingjian.app/download)（macOS、Windows）
+- 文档：[qingjian.app/docs](https://qingjian.app/docs)（安装、按键、设置、数据与隐私）
+- 反馈：[GitHub Issues](https://github.com/qingjian-team/qingjian/issues/new/choose)
+- QQ 群：[902314603](https://qm.qq.com/q/jBvn2gGTxm)（青简输入法用户内测体验交流群）
+
 ---
 
 ## 为什么叫「青简」
@@ -120,76 +126,27 @@ Linux    → IBus / Fcitx
 
 ---
 
-## 文档
-
-技术架构、候选窗口设计、路线图、同类项目分析和性能优化记录见 [`docs/`](docs/)。
-
----
-
-## 安装（macOS 测试版）
-
-下载 `Qingjian-<版本>-arm64.pkg`（Apple Silicon）或 `Qingjian-<版本>-x86_64.pkg`（Intel）双击安装，需要管理员密码。测试版还没有 Apple 开发者签名，首次打开系统会拦一下：
-到「系统设置 → 隐私与安全性」底部点「仍要打开」再装一次。
-
-装完输入法菜单里就有「青简」；没有的话到「系统设置 → 键盘 → 输入法 → 编辑 → +」在简体中文下添加，
-还没有就注销再登录。偏好设置在输入法菜单里。
-
-- 用户数据（学习到的词频、配置）在「~/Library/Application Support/Qingjian/」，日志在「~/Library/Logs/Qingjian/」。
-- 卸载：运行 `/Library/Input Methods/Qingjian.app/Contents/Resources/uninstall.sh`，加 `--purge` 连数据一起删。
-- 遇到问题把当天的日志和偏好设置「关于」页的「复制诊断信息」发给作者。诊断信息会把密钥抹掉。
-
-### 基本用法
-
-- **中英切换是 Caps Lock**（键盘上的中 / 英键）。灭着是中文，亮着是英文。
-- **中文**：空格上屏第一个候选，数字键选第 N 个，`[` `]` 翻页（可改），回车把拼音原样上屏。
-  云端整句（开了 `[predict]` 才有）显示在拼音右侧，Tab 接受。
-- **英文**：亮着 Caps Lock 敲字母，候选窗口给英文词的补全和拼错纠正。**空格、回车、标点都是把敲的字母原样上屏**，
-  和没有输入法一样，打 `kubectl` 这类词不会被改掉；要选候选按 **Tab**（选高亮的那个）或**上下键**移到它再按空格 / Tab。
-  数字在这里是数字，不选词。字母默认小写，按住 Shift 才大写。不想要英文候选可以在偏好设置「通用」页关掉，终端和代码编辑器里缺省就不给。
-- **问字**：缓冲区为空时敲 `?`（中文模式也可以用 `u`）再用拼音敲问题，如 `?sangemushishenmezi`（三个木是什么字），开了云端才能答。
-- **生词**：候选右侧橙色的译词是你还没见过几次的词，看熟了自动变回灰色；偏好设置「统计」页能看到见过 / 看熟了多少个词。
-
----
-
 ## 隐私
 
 **青简不上传任何数据。** 拼音转换、词库、学习、释义全部在本机完成，没有账号，没有统计上报。
-
-有两处会产生数据，都在你手里：
-
-- **云联想 / 翻译选中文字**（缺省关闭）。打开后，组句时的拼音、光标前后各几十个字的上下文、本机给出的候选，会发给你自己在
-  偏好设置「云服务」页填写的 AI 服务商（缺省 DeepSeek，也可以填任何 OpenAI 兼容接口）。数据直接从你的电脑发到服务商，
-  不经过作者。密码框（Secure Input）里绝不发送。云联想开着时，随包释义表里没有译词的词在你打出它之后也会单独发一次（只有那个词），
-  回来的译词存进同目录的 `user-glossary-<语言>.tsv`，下次候选旁边就有；这个文件可以手改。关掉「云服务」页的开关就不再发任何请求。
-- **输入日志**（缺省开启，测试版）。每次上屏在本机记一行：敲的键、切分、看到的前几个候选、选了第几个。它只写在这台电脑的
-  「~/Library/Application Support/Qingjian/input-log.jsonl」，用于离线回归评测和你自己的个人模型，**不会自动发给任何人**。
-  关掉：偏好设置「高级」页取消勾选「记录输入日志」，或在 `config.toml` 里写 `input_log = false`；同一页的「清空输入日志」
-  删掉已记的内容。测试时如果愿意把这个文件发给作者，对改进排序帮助很大，但完全自愿。
-
-偏好设置「统计」页显示你用青简打了多少字（今天 / 最近 7 天 / 累计，再折成几本《某书》）和学习语言的词汇数。前者按天记在同目录的
-`usage.tsv` 里，只有几个数字；后者记在 `user-vocab.tsv`，每行是一条译词（如 `develop`）和它被看到 / 上屏 / 打出的次数，不含你打的中文。两者都与输入日志无关。
-
-日志文件（「~/Library/Logs/Qingjian/」）缺省级别不记你敲了什么；只有把日志级别调到 debug 才逐键记录，用于排查问题。
+云联想（缺省关闭）打开后，请求直接从你的电脑发到你自己填写的 AI 服务商，不经过作者；输入日志只写在本机，可以随时关闭和清空。
+细节见文档 [数据与日志](https://qingjian.app/docs/help/data-and-logs)。
 
 ---
 
-## 数据来源与许可
+## 许可
 
 代码以 **GPL-3.0-or-later** 发布（见 [LICENSE](LICENSE)）：可以自由使用、修改与再分发，修改后分发须同样开源。
 「青简」名字与 logo 不在授权范围内。青简在官方渠道免费；若你为获得它向他人付费，你被骗了。
 
-随包数据各自遵循来源的许可证，偏好设置「关于」页也列了这份清单：
+随包数据（词库、语言模型、释义表、emoji、英文词表、词汇等级、五笔码表）各自遵循来源的许可证，清单见 [docs/design/landscape.md](docs/design/landscape.md)，偏好设置「关于」页也列了一份。
 
-| 数据 | 来源与许可 |
-|---|---|
-| 词库 | 通用规范汉字表；现代汉语常用词表（liuxilu 校对版）；THUOCL 领域词（清华大学自然语言处理实验室，MIT）；读音取自 Unihan（Unicode License v3） |
-| 语言模型 | 中文维基百科（CC BY-SA 4.0）与 LCCC（清华大学 CoAI，MIT）语料统计 |
-| 释义表 | 由大语言模型（DeepSeek）离线生成，青简自建 |
-| emoji | Unicode CLDR annotations（Unicode License v3） |
-| 英文词表 | ESDB / SCOWL（© Kevin Atkinson，按其许可保留版权声明）；CSpell 词典（MIT） |
-| 词汇等级 | The CEFR-J Wordlist Version 1.5（Yukio Tono，Tokyo University of Foreign Studies，[cefr-j.org](http://www.cefr-j.org/download.html)）；Octanove Vocabulary Profile C1/C2（CC BY-SA 4.0）；JLPT 词表（[tanos.co.uk](http://www.tanos.co.uk/jlpt/)，CC BY；经 elzup/jlpt-word-list 整理，MIT） |
+---
 
-各许可证原文在 `assets/` 对应目录下。
+## 参与开发
+
+技术架构、设计决定、路线图与工程记录见 [`docs/`](docs/)；改代码前先看 [开发约定](docs/contributing.md)。
+欢迎提 issue 与 PR，PR 模板里有合并前清单。
 
 ---
 

@@ -123,6 +123,30 @@ fn complete_syllable_that_is_also_prefix_expands_after_exact() {
 }
 
 #[test]
+fn keyboard_u_umlaut_spelling_matches_canonical_dictionary_keys() {
+    let dictionary =
+        Dictionary::parse("策略\tce lve\t9000\n虐待\tnve dai\t8000\n学习\txue xi\t7000\n").unwrap();
+    let mut engine = Engine::new(dictionary);
+
+    engine.set_input("celue");
+    let query = engine.query().unwrap();
+    assert_eq!(query.marked_text(), "ce'lue");
+    assert_eq!(query.candidates.items[0].text, "策略");
+    assert_eq!(query.candidates.items[0].syllables, ["ce", "lve"]);
+    let strategy = query.candidates.items[0].clone();
+    assert_eq!(engine.commit(&strategy), "策略");
+    assert!(engine.composition().is_empty());
+
+    engine.set_input("nuedai");
+    assert_eq!(engine.query().unwrap().candidates.items[0].text, "虐待");
+
+    engine.set_input("xuexicelue");
+    let sentence = &engine.query().unwrap().candidates.items[0];
+    assert_eq!(sentence.text, "学习策略");
+    assert_eq!(sentence.kind, CandidateKind::Sentence);
+}
+
+#[test]
 fn empty_input_is_an_error() {
     assert_eq!(engine().query().unwrap_err(), ParseError::Empty);
 }
@@ -223,6 +247,34 @@ fn shortcuts_follow_the_first_local_candidate() {
 }
 
 #[test]
+fn shift_letters_join_the_buffer_only_when_configured() {
+    let dictionary = Dictionary::parse("C盘\tc pan\t8000\n磁盘\tci pan\t249\n").unwrap();
+    let mut engine = Engine::new(dictionary);
+    let type_cpan = |engine: &mut Engine| {
+        // 中文模式下按住 Shift 敲 C，再打 pan
+        engine.push('C');
+        for c in "pan".chars() {
+            engine.push(c);
+        }
+    };
+
+    // 缺省 `shift_letter = "passthrough"`：壳直接把大写字母交给应用，这一路本来就不会走到；
+    // 万一走到也不该被当成拼音去匹配（所以「C盘」出不来）
+    type_cpan(&mut engine);
+    assert_ne!(engine.query().unwrap().candidates.items[0].text, "C盘");
+    engine.clear();
+
+    // 开了 compose：按小写参与匹配，拼音行按敲的样子显示，回车原样上屏时保留大写
+    engine.set_shift_letter_compose(true);
+    type_cpan(&mut engine);
+    let query = engine.query().unwrap();
+    assert_eq!(query.candidates.items[0].text, "C盘");
+    assert_eq!(query.marked_text(), "C'pan");
+    assert_eq!(engine.take_raw(), "Cpan");
+    assert!(engine.composition().is_empty());
+}
+
+#[test]
 fn expression_mode_skips_pinyin_and_evaluates() {
     let mut engine = self::engine();
     assert!(!engine.expression_mode());
@@ -245,7 +297,7 @@ fn expression_mode_skips_pinyin_and_evaluates() {
     assert_eq!(query.marked_text(), "v");
 
     // v 开头的英文词仍能混输
-    let words = WordList::parse("very\n").unwrap();
+    let words = WordList::parse("very\tvery\t4800\n").unwrap();
     let mut engine = self::engine().with_english(words);
     engine.set_input("very");
     let query = engine.query().unwrap();

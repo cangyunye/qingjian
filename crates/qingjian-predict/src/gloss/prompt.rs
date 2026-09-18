@@ -12,6 +12,9 @@ const MAX_ENGLISH_BYTES: usize = 40;
 /// 单条日文译词最多几个字符。
 const MAX_JAPANESE_CHARS: usize = 16;
 
+/// 单条西班牙文译词最多几个字符：西语词比英文长（`restablecimiento`），放宽一点。
+const MAX_SPANISH_CHARS: usize = 32;
+
 pub const ENGLISH_SYSTEM_PROMPT: &str = "你是汉英词典编纂者。给每个中文词写最简短的英文对应词，供拼音输入法在候选词旁边一行显示，所以只要词、不要解释。\n\
 规则：\n\
 - pos：这个中文词最主要的词性，只能是 n. v. adj. adv. pron. prep. conj. num. m. part. int. phr. 之一（m. 量词，part. 助词，phr. 短语或成语）。\n\
@@ -28,10 +31,19 @@ pub const JAPANESE_SYSTEM_PROMPT: &str = "你是汉日词典编纂者。给每�
 输出严格的 JSON：{\"items\":[{\"w\":\"开发\",\"pos\":\"v.\",\"senses\":[{\"t\":\"開発する\",\"r\":\"かいはつする\"}]}]}。\n\
 items 与输入的词一一对应、顺序一致、每个词恰好一项，w 必须原样照抄输入的词。";
 
+pub const SPANISH_SYSTEM_PROMPT: &str = "你是汉西词典编纂者。给每个中文词写最简短的西班牙文对应词，供拼音输入法在候选词旁边一行显示，所以只要词、不要解释。\n\
+规则：\n\
+- pos：这个中文词最主要的词性，只能是 n. v. adj. adv. pron. prep. conj. num. m. part. int. phr. 之一（m. 量词，part. 助词，phr. 短语或成语）。\n\
+- senses：1 到 2 条最贴切的西班牙文对应词，按常用度排；每条不超过 3 个西班牙文单词；动词用原形（不定式），名词用单数，形容词用阳性单数；不要括号、不要解释、不要例句。\n\
+- 人名地名等专名照译；多义词只取最常用的义项；网络用语、方言也要给最接近的说法；没有把握也要给最可能的答案，不要留空。\n\
+输出严格的 JSON：{\"items\":[{\"w\":\"开发\",\"pos\":\"v.\",\"senses\":[{\"t\":\"desarrollar\"},{\"t\":\"explotar\"}]}]}。\n\
+items 与输入的词一一对应、顺序一致、每个词恰好一项，w 必须原样照抄输入的词。";
+
 /// 学习语言对应的系统提示；中文没有（不会请求）。
 pub fn system_prompt(language: Language) -> &'static str {
     match language {
         Language::Japanese => JAPANESE_SYSTEM_PROMPT,
+        Language::Spanish => SPANISH_SYSTEM_PROMPT,
         Language::English | Language::Chinese => ENGLISH_SYSTEM_PROMPT,
     }
 }
@@ -131,6 +143,11 @@ fn clean_text(raw: &str, language: Language) -> Option<String> {
             text.chars().count() <= MAX_JAPANESE_CHARS
                 && !text.contains(['(', '（', '、', '，', ','])
         }
+        Language::Spanish => {
+            text.chars().count() <= MAX_SPANISH_CHARS
+                && text.split_whitespace().count() <= 4
+                && text.chars().all(is_spanish_char)
+        }
         Language::English | Language::Chinese => {
             text.len() <= MAX_ENGLISH_BYTES
                 && text.split_whitespace().count() <= 4
@@ -140,6 +157,14 @@ fn clean_text(raw: &str, language: Language) -> Option<String> {
         }
     };
     ok.then(|| text.to_owned())
+}
+
+/// 西班牙文译词认得的字符：ASCII 字母数字加西语用的拉丁扩展字母（á é í ó ú ü ñ 等）。
+/// 只认字母，避免把汉字或西里尔字母当成译词收进来。
+fn is_spanish_char(c: char) -> bool {
+    c.is_ascii_alphanumeric()
+        || matches!(c, ' ' | '-' | '\'' | '.' | '/')
+        || (matches!(c as u32, 0x00C0..=0x024F) && c.is_alphabetic())
 }
 
 /// 全是假名（含长音、中点）。
@@ -182,5 +207,41 @@ mod tests {
         assert_eq!(senses[1].reading, None);
         assert_eq!(filled[0].translation.language, Language::Japanese);
         assert!(user_prompt(&words).contains("开发"));
+    }
+
+    #[test]
+    fn keeps_spanish_accents_and_drops_explanations() {
+        let words = vec!["开发".to_owned(), "椅子".to_owned()];
+        let content = r#"{"items":[
+            {"w":"开发","pos":"v.","senses":[{"t":"desarrollar"},{"t":"explotar (un recurso)"},{"t":"to develop something really big"}]},
+            {"w":"椅子","pos":"n.","senses":[{"t":"sillón"},{"t":"asiento"}]}
+        ]}"#;
+        let filled = parse_reply(content, Language::Spanish, &words);
+        assert_eq!(filled.len(), 2);
+        let senses = filled[0].translation.senses();
+        assert_eq!(senses.len(), 1);
+        assert_eq!(senses[0].text, "desarrollar");
+        assert_eq!(senses[0].reading, None);
+        assert_eq!(filled[1].translation.senses()[0].text, "sillón");
+        assert_eq!(filled[1].translation.language, Language::Spanish);
+    }
+
+    #[test]
+    fn spanish_keeps_accented_words_but_rejects_han_and_cyrillic() {
+        assert_eq!(
+            clean_text("niño", Language::Spanish).as_deref(),
+            Some("niño")
+        );
+        assert_eq!(
+            clean_text("coche.", Language::Spanish).as_deref(),
+            Some("coche")
+        );
+        assert_eq!(
+            clean_text("a través de", Language::Spanish).as_deref(),
+            Some("a través de")
+        );
+        assert_eq!(clean_text("开发", Language::Spanish), None);
+        assert_eq!(clean_text("разработка", Language::Spanish), None);
+        assert!(system_prompt(Language::Spanish).contains("西班牙文"));
     }
 }

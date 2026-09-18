@@ -25,6 +25,13 @@ fn question_mode_asks_the_cloud_and_shows_answers_unvalidated() {
         sentence: true,
     };
     let mut engine = self::engine().with_predictor(Box::new(predictor));
+    // 缺省 `?` 不是入口：开了开关才进问字
+    assert!(!engine.takes_question_mark());
+    engine.set_mode_keys(ModeKeys {
+        question_mark: true,
+        ..ModeKeys::default()
+    });
+    assert!(engine.takes_question_mark());
     engine.push('?');
     assert!(engine.bare_question());
     assert!(engine.question_mode());
@@ -101,6 +108,38 @@ fn prediction_request_trims_context_and_only_fires_while_composing() {
     // 上屏之后不联想
     engine.clear();
     assert_eq!(engine.request_prediction(None, &[]), None);
+}
+
+/// 简拼（半数以上音节是缩写）只问整句补全：模型按声母凑出来的词大多是生造词（复合语气、符号映射）。
+#[test]
+fn abbreviated_input_only_asks_for_the_sentence() {
+    let submitted = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let mut engine = engine().with_predictor(Box::new(EchoPredictor {
+        submitted: submitted.clone(),
+        replies: Vec::new(),
+        sentence: true,
+    }));
+    engine.set_input("zhsh");
+    let query = engine.query().unwrap();
+    assert_eq!(
+        engine.request_prediction(None, &query.candidates.items),
+        Some(1)
+    );
+    let request = submitted.borrow()[0].clone();
+    assert_eq!(request.letters, "zhsh");
+    assert_eq!(request.max_items, 0, "简拼不该要词");
+    assert!(request.want_sentence, "整句补全照常要");
+
+    // 完整拼音照常要词
+    engine.set_input("zhongshi");
+    let query = engine.query().unwrap();
+    assert_eq!(
+        engine.request_prediction(None, &query.candidates.items),
+        Some(2)
+    );
+    let request = submitted.borrow()[1].clone();
+    assert_eq!(request.max_items, 2);
+    assert!(request.want_sentence);
 }
 
 #[test]
@@ -315,8 +354,14 @@ fn question_key_answers_code_points_locally_and_keeps_question_mark_alias() {
     let body = query.tail.strip_prefix('u').unwrap().to_owned();
     assert!(!body.is_empty());
 
-    // `?` 别名：同一个问题、同样的切分，只是前缀不同
+    // `?` 缺省不是入口：`?sangemu` 是英文直输段而不是问题
     engine.set_input("?sangemu");
+    assert!(!engine.question_mode() && engine.raw_mode());
+    // 开了开关才是别名：同一个问题、同样的切分，只是前缀不同
+    engine.set_mode_keys(ModeKeys {
+        question_mark: true,
+        ..ModeKeys::default()
+    });
     assert!(engine.question_mode());
     assert_eq!(engine.query().unwrap().tail, format!("?{body}"));
 
@@ -324,6 +369,7 @@ fn question_key_answers_code_points_locally_and_keeps_question_mark_alias() {
     engine.set_mode_keys(ModeKeys {
         expression: 'v',
         question: 'i',
+        question_mark: false,
     });
     engine.set_input("u4e00");
     assert!(!engine.question_mode());
@@ -333,6 +379,7 @@ fn question_key_answers_code_points_locally_and_keeps_question_mark_alias() {
     engine.set_mode_keys(ModeKeys {
         expression: 'u',
         question: 'u',
+        question_mark: false,
     });
     assert_eq!(engine.mode_keys(), ModeKeys::default());
 }
@@ -365,6 +412,41 @@ fn committing_a_cloud_word_learns_it_and_it_ranks_first_next_time() {
     engine.commit(&kaifa);
     engine.set_input("kaifa");
     assert_eq!(texts_of(&engine).iter().filter(|t| *t == "开发").count(), 1);
+}
+
+#[test]
+fn traditional_mode_preserves_original_text_across_queries() {
+    let mut engine = engine()
+        .with_predictor(Box::new(EchoPredictor {
+            submitted: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
+            sentence: false,
+            replies: vec![Prediction {
+                sequence: 1,
+                words: vec![cloud("凯发", &["kai", "fa"])],
+                sentence: None,
+            }],
+        }))
+        .with_learner(Box::new(WordLearner::default()));
+
+    engine.set_traditional_mode(true);
+    engine.set_input("kaifa");
+    engine.request_prediction(None, &[]);
+    let prediction = engine.poll_prediction().unwrap();
+    let cloud_text = prediction.words[0].text.clone();
+
+    engine.query().unwrap(); // 第二次 query() 不应清空云端词的映射
+
+    let word = Candidate {
+        text: cloud_text,
+        kind: CandidateKind::Cloud,
+        syllables: vec!["kai".into(), "fa".into()],
+        reading: None,
+        translation: None,
+    };
+    assert_eq!(engine.commit(&word), "凱發");
+    // 检查词库里学到的是简体「凯发」
+    assert!(engine.learner().weight("凯发") > 0);
+    assert_eq!(engine.learner().weight("凱發"), 0);
 }
 
 #[test]
@@ -446,4 +528,40 @@ fn translation_requests_carry_the_text_and_target_language() {
     // 外文选区译回中文
     engine.request_translation("I want to eat.").unwrap();
     assert_eq!(sent.lock().unwrap()[1].target_language, "zh");
+}
+
+#[test]
+fn bare_question_restores_punctuation_once_in_each_mode() {
+    for (english, full_width, expected) in [
+        (false, false, "?"),
+        (false, true, "？"),
+        (true, false, "?"),
+        (true, true, "?"),
+    ] {
+        let mut engine = engine();
+        engine.set_full_width_punctuation(full_width);
+        engine.push('?');
+        assert_eq!(
+            engine.restore_bare_question(english).as_deref(),
+            Some(expected)
+        );
+        assert!(engine.composition().is_empty());
+        assert_eq!(engine.history().text(), expected);
+        assert_eq!(engine.passthrough_pending, expected);
+        assert_eq!(engine.restore_bare_question(english), None);
+        assert_eq!(engine.history().text(), expected);
+        assert_eq!(engine.passthrough_pending, expected);
+    }
+}
+
+#[test]
+fn restoring_question_preserves_other_compositions() {
+    for input in ["", "nihao", "?nihao"] {
+        let mut engine = engine();
+        engine.set_input(input);
+        assert_eq!(engine.restore_bare_question(false), None);
+        assert_eq!(engine.composition().text(), input);
+        assert!(engine.history().text().is_empty());
+        assert!(engine.passthrough_pending.is_empty());
+    }
 }

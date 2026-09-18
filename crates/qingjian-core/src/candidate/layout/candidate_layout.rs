@@ -44,13 +44,17 @@ impl CandidateLayout {
         if self.local.is_empty() {
             self.page_size
         } else {
-            self.slots.min(self.page_size - 1)
+            let fixed = self
+                .local
+                .iter()
+                .filter_map(|c| match c.kind {
+                    CandidateKind::Custom(n) => Some(n),
+                    _ => None,
+                })
+                .max()
+                .unwrap_or(1);
+            self.slots.min(self.page_size.saturating_sub(fixed.max(1)))
         }
-    }
-
-    /// 第一页放几个本地候选。
-    fn first_page_local(&self) -> usize {
-        self.local.len().min(self.page_size - self.cloud.len())
     }
 
     /// 云端词到了：与本地候选同文的不要（本地已经能给），其余按顺序填进第一页末尾，多出来的丢掉。返回填进去的条数。
@@ -70,18 +74,53 @@ impl CandidateLayout {
         self.cloud.len()
     }
 
-    /// 全部格子按索引顺序排开。
+    /// 本地格数包含最大固定位置之前的空格。
+    fn local_len(&self) -> usize {
+        self.local
+            .iter()
+            .filter_map(|c| match c.kind {
+                CandidateKind::Custom(position) => Some(position),
+                _ => None,
+            })
+            .max()
+            .unwrap_or(0)
+            .max(self.local.len())
+    }
+
+    /// 真实本地候选按固定位置放置，其余候选依次填入空格。
+    fn local_cells(&self) -> Vec<Cell<'_>> {
+        let mut cells = vec![Cell::Empty; self.local_len()];
+        for candidate in &self.local {
+            if let CandidateKind::Custom(position) = candidate.kind
+                && let Some(cell) = position.checked_sub(1).and_then(|i| cells.get_mut(i))
+            {
+                *cell = Cell::Local(candidate);
+            }
+        }
+        let mut normal = self
+            .local
+            .iter()
+            .filter(|c| !matches!(c.kind, CandidateKind::Custom(_)));
+        for cell in &mut cells {
+            if matches!(cell, Cell::Empty)
+                && let Some(candidate) = normal.next()
+            {
+                *cell = Cell::Local(candidate);
+            }
+        }
+        cells
+    }
+
+    /// 全部格子按索引顺序排开；空位只属于布局。
     pub fn cells(&self) -> Vec<Cell<'_>> {
-        let first = self.first_page_local();
-        let mut cells = Vec::with_capacity(self.len());
-        cells.extend(self.local[..first].iter().map(Cell::Local));
-        cells.extend(self.cloud.iter().map(Cell::Cloud));
-        cells.extend(self.local[first..].iter().map(Cell::Local));
+        let mut cells = self.local_cells();
+        let first = cells.len().min(self.page_size - self.cloud.len());
+        cells.splice(first..first, self.cloud.iter().map(Cell::Cloud));
         cells
     }
 
     pub fn len(&self) -> usize {
-        self.local.len() + self.cloud.len()
+        self.local_len() + self.cloud.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -94,7 +133,7 @@ impl CandidateLayout {
 
     /// 第 `index` 格的候选；越界返回 `None`。
     pub fn candidate(&self, index: usize) -> Option<&Candidate> {
-        self.cells().get(index).map(|cell| cell.candidate())
+        self.cells().get(index).and_then(|cell| cell.candidate())
     }
 
     /// 第 `page` 页的格子。
@@ -134,6 +173,7 @@ mod tests {
             .map(|cell| match cell {
                 Cell::Local(c) => c.text.clone(),
                 Cell::Cloud(c) => format!("☁{}", c.text),
+                Cell::Empty => "<empty>".into(),
             })
             .collect()
     }
@@ -212,5 +252,36 @@ mod tests {
         layout.set_cloud(vec![cloud("云0"), cloud("云1"), cloud("云2")]);
         assert_eq!(texts(&layout.page(0)), ["本0", "☁云0", "☁云1"]);
         assert_eq!(texts(&layout.page(1)), ["本1", "本2", "本3"]);
+    }
+
+    #[test]
+    fn sparse_custom_positions_are_layout_cells_not_candidates() {
+        let fixed = Candidate {
+            kind: CandidateKind::Custom(3),
+            ..local("短语")
+        };
+        let mut layout = CandidateLayout::new(vec![fixed, local("普通")], 5, 2);
+        assert_eq!(layout.local().len(), 2);
+        assert_eq!(texts(&layout.page(0)), ["普通", "<empty>", "短语"]);
+        assert!(layout.candidate(1).is_none());
+        assert_eq!(layout.set_cloud(vec![cloud("云")]), 1);
+        assert_eq!(texts(&layout.page(0)), ["普通", "<empty>", "短语", "☁云"]);
+    }
+
+    #[test]
+    fn ninth_position_stays_on_second_page_without_cloud_displacement() {
+        let mut layout = CandidateLayout::new(
+            vec![Candidate {
+                kind: CandidateKind::Custom(9),
+                ..local("第九")
+            }],
+            5,
+            2,
+        );
+        assert_eq!(layout.pages(), 2);
+        assert_eq!(layout.capacity(), 0);
+        assert_eq!(layout.set_cloud(vec![cloud("云")]), 0);
+        assert_eq!(layout.candidate(8).unwrap().text, "第九");
+        assert!(layout.candidate(7).is_none());
     }
 }

@@ -37203,7 +37203,7 @@ type	type	5270
 typed	typed	3520
 typeface	typeface	2850
 types	types	4850
-typescript	typescript	2590
+TypeScript	typescript	2590
 typeset	typeset	2210
 typesetter	typesetter	1890
 typesetting	typesetting	2560
@@ -94402,7 +94402,7 @@ VPS	vps	2750
 VRAM	vram	2029
 VSAN	vsan	1580
 vsce	vsce	0
-vscode	vscode	1190
+VSCode	vscode	1190
 vscodium	vscodium	0
 vScroll	vscroll	0
 vsliveshare	vsliveshare	0
@@ -94565,3 +94565,5 @@ zsh	zsh	1480
 Zuul	zuul	1650
 zVal	zval	0
 Zypper	zypper	0
+Bilibili	bilibili	0
+LinkedIn	linkedin	0

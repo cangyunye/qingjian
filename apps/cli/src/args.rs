@@ -41,7 +41,7 @@ pub struct Args {
     #[arg(long)]
     pub glossary: Option<PathBuf>,
 
-    /// 学习语言：en / ja。也可用环境变量 QINGJIAN_LEARNING_LANGUAGE
+    /// 学习语言：en / ja / es。也可用环境变量 QINGJIAN_LEARNING_LANGUAGE
     #[arg(long, env = "QINGJIAN_LEARNING_LANGUAGE", default_value = "en")]
     pub language: String,
 
@@ -73,9 +73,17 @@ pub struct Args {
     #[arg(long)]
     pub english_mode: bool,
 
-    /// 双拼方案（xiaohe / ziranma / microsoft / sogou），覆盖配置里的 [general] shuangpin；off 强制全拼
+    /// 打开中文优先（配置 [general] chinese_first = true）：整段是英文词时中文候选排第一、英文第二，评测两种排法用
+    #[arg(long)]
+    pub chinese_first: bool,
+
+    /// 双拼方案（xiaohe / ziranma / microsoft / sogou / xiaolang），覆盖配置里的 [general] shuangpin；off 强制全拼
     #[arg(long)]
     pub shuangpin: Option<String>,
+
+    /// 形码码表（五笔）的 TSV 文件（`词\t编码\t词频`）：给了就用编码查表，不走拼音那一套
+    #[arg(long, value_name = "码表")]
+    pub wubi: Option<PathBuf>,
 
     /// 神经重打分：字级 Transformer 的 .qjm 文件或导出目录（model.safetensors / config.json / vocab.json），整句前几条路径用它重排
     #[arg(long)]

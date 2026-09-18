@@ -1,3 +1,5 @@
+//! 候选布局的一格；空位不携带候选，由各平台绘制和跳过。
+
 use super::super::Candidate;
 
 /// 排布里的一格。
@@ -8,12 +10,16 @@ pub enum Cell<'a> {
 
     /// 云端词。
     Cloud(&'a Candidate),
+
+    /// 固定位置之前尚无真实候选的空格。
+    Empty,
 }
 
 impl<'a> Cell<'a> {
-    pub fn candidate(self) -> &'a Candidate {
+    pub fn candidate(self) -> Option<&'a Candidate> {
         match self {
-            Cell::Local(c) | Cell::Cloud(c) => c,
+            Cell::Local(c) | Cell::Cloud(c) => Some(c),
+            Cell::Empty => None,
         }
     }
 }

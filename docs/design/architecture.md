@@ -151,15 +151,15 @@ apps/*                     （组装：Engine::new(dict).with_translator(..).wit
 
 `apps/cli` 是 Phase 1 的测试壳：`cargo run -p qingjian-cli -- kaifa` 直接查询，
 不带参数进入交互模式（拼音查询、序号上屏、`:q` 退出），`--user-dict` 指定用户词频文件，
-`--language en|ja` 或环境变量 `QINGJIAN_LEARNING_LANGUAGE` 选学习语言。
+`--language en|ja|es` 或环境变量 `QINGJIAN_LEARNING_LANGUAGE` 选学习语言。
 `--typing` 是性能测试模式：把输入当一键一键敲进去，每个前缀查一次并标注译文，一行一键打印各阶段耗时
 （这是输入法每键的真实工作量，联想在后台线程不算），启动日志里带各数据文件的加载耗时。
 性能改动要用 release 构建跑它看数字，目标每键 10 ms 以内。
 
 - Core 只依赖 dictionary，不依赖 translate 和 learning。翻译与学习通过 trait 注入（`Translator` / `Learner` / `InputLogger` / `UsageMeter` / `VocabularyTracker`，
   缺省实现都是空操作），这样 Core 的单元测试和 CLI 工具不需要真实词典也能跑。
-- `qingjian-platform` 里的类型必须可序列化（serde）：macOS 和 Linux 上 Core 与壳同进程，
-  Windows 上 Core 在独立 Server 进程，同一套协议类型两边都用。
+- `qingjian-platform` 里的类型必须可序列化（serde）：macOS 上 Core 与壳同进程，
+  Windows 和 Linux 上 Core 在独立 Server 进程，同一套协议类型两边都用。
 - `storage` 只放 Core 自己的持久化原语，用户词频的数据模型归 `qingjian-learning`。
 
 ## 翻译的异步模型
@@ -339,7 +339,7 @@ CC-CEDICT 表（`dict-convert cedict`）保留为备用来源，覆盖面广但�
   `host/` 是进程级单例（一个 Engine + 一个候选窗口，`thread_local`，IMK 回调全在主线程；`mod.rs` 放结构体与 `with`，`init.rs` 启动加载、`config.rs` 热加载、`settings.rs` 菜单 / 偏好设置动作、`dictionaries.rs` 词库管理、`cloud.rs` 云端、`diagnostics.rs` 诊断与日志、`presenting.rs` 呈现），
   `host/` 下是会话状态 `session.rs`、联想轮询定时器 `predict_monitor.rs`、配置文件监视与定时落盘 `config_watch.rs`、
   短提示 `notice.rs`、翻译选中文字的任务 `translation_job.rs`、附加词库装配 `extra_dictionaries.rs` / `dictionary_info.rs`；
-  `imk/`：`controller.rs` 用 `define_class!` 继承 `IMKInputController`（类名 `QingjianInputController`，
+  `imk/`：`controller/`（`mod.rs` 是类定义与按键分发，`text` / `command` / `translate` / `display` / `commit` 各管一段）用 `define_class!` 继承 `IMKInputController`（类名 `QingjianInputController`，
   与 Info.plist 的 `InputMethodServerControllerClass` 一致），只做按键 → Engine、Engine → 窗口；
   `client.rs` 用 `msg_send!` 封装 IMKTextInput（`setMarkedText:` / `insertText:` /
   `attributesForCharacterIndex:lineHeightRectangle:` 取光标矩形）；`modifiers.rs` / `secure_input.rs` 查系统状态；
@@ -354,7 +354,7 @@ CC-CEDICT 表（`dict-convert cedict`）保留为备用来源，覆盖面广但�
   `settings.rs` 是配置文件的运行时状态，`logging/` 只写 `~/Library/Logs/Qingjian/`（自己的 `LogFile` 按天分文件、留 7 天、被删重建），`bundle.rs` 读 Info.plist，
   `input_source.rs` 是 `qingjian-macos --register`：走 Carbon TIS（`TISRegisterInputSource` + `TISEnableInputSource`，再起子进程 `--finish-register` 回读 `IsEnabled` 并 `TISSelectInputSource`，隔 3 秒二次确认）把 `.app` 注册成输入源并切成当前。两个坑：TIS 状态按进程缓存，本进程回读永远是旧值，只有新进程看得到；刚换过包的 3–5 秒内系统重扫会把刚启用的记录顶掉，所以要二次确认并启用。
 - **打包与分发**（`apps/macos/scripts/bundle.sh`）：版本号来自 workspace `Cargo.toml`，构建号是提交数，打包时用 PlistBuddy 写进 Info.plist。
-  `--install` 装到 `~/Library/Input Methods/`（开发用）；`--pkg` 做 `target/pkg/Qingjian-<版本>.pkg`：`pkgbuild` 组件包装到
+  `--install` 装到 `~/Library/Input Methods/`（开发用）；`--pkg` 做 `target/pkg/qingjian-<版本>-macos-<arch>.pkg`：`pkgbuild` 组件包装到
   `/Library/Input Methods/`（macOS 输入法的惯例位置，需要管理员密码；组件描述里关掉 bundle 重定位，否则会装到机器上同 id 的旧副本那里），
   postinstall 杀旧进程并 `launchctl asuser <uid> sudo -u <登录用户> qingjian-macos --register`（安装器是 root，输入源是每用户的），
   `productbuild` 套上欢迎页 / 许可证（`LICENSE`）/ 结束页（`apps/macos/pkg/`）。签名与公证全由环境变量决定：
@@ -362,7 +362,7 @@ CC-CEDICT 表（`dict-convert cedict`）保留为备用来源，覆盖面广但�
   `QINGJIAN_NOTARY_PROFILE`（notarytool keychain profile，设了就公证并 staple）；没设就 ad-hoc 签 `.app`、pkg 不签，
   测试者要在「隐私与安全性」里点「仍要打开」。卸载脚本 `uninstall.sh` 随包放在 Resources。二进制只有本机架构，Intel 要另打。
 - 配置只有一条通路：`Host::apply_config` 把当前 `Config` 推给 Engine（模糊音、模式键、Predictor 重建、释义表切换）与界面
-  （每页候选数、翻页键、外观、☁︎ 标识、菜单勾选、设置窗口控件）。启动、菜单开关、设置窗口、`host/config_watch.rs`
+  （每页候选数、翻页键、外观、☁︎ 标识、菜单勾选、设置窗口控件）。启动、菜单开关、设置窗口、`host/config/watch.rs`
   每秒一次的 mtime 监视全都走它；三个入口都只写 `config.toml`，不各存一套状态。解析失败沿用上一份，错误显示在菜单与设置窗口里。
   按键走 `inputText:client:` +
   `didCommandBySelector:client:`，不用 `handleEvent:`。**组句期间 `didCommandBySelector:` 对不认识的
@@ -375,6 +375,19 @@ CC-CEDICT 表（`dict-convert cedict`）保留为备用来源，覆盖面广但�
   逻辑放到 inherent impl 里，宏内只做转发。
 - Info.plist 约定：bundle id 是 `app.qingjian.inputmethod`（域名 qingjian.app 的反写 + 产品，其他平台外壳共用 `app.qingjian.` 前缀），`TISInputSourceID` 与它相同，`InputMethodConnectionName` 必须是 `<bundle id>_Connection`；
   `LSBackgroundOnly = true`；ad-hoc `codesign` 之后 Apple Silicon 才会加载。
+  **输入模式**：`ComponentInputModeDict` 里声明单模式 `app.qingjian.inputmethod.Hans`（TextInputSources.h 规定的位置），
+  系统登记、启用、切换的都是模式，顶层 ID 只是父项，所以 `--register` 启用的是 `tsVisibleInputModeOrderedArrayKey` 的第一项；
+  模式显示名在 `InfoPlist.strings` 按模式 ID 给，缺了对话框里显示裸 ID。没有模式时标准文本视图（备忘录等）切不过去、
+  「添加输入法」列表也不出现（#31）。
+  **图标**：顶层 `tsInputMethodIconFileKey` 与模式里的 Menu / AlternateMenu / Palette 三个图标键都指向同一张 22×16pt 模板 PDF
+  （黑色键帽镂空图形，`TISIconIsTemplate` 让系统只取 alpha 按深浅色反色），鼠须管、Fcitx5 同此尺寸与形式，小了整体偏小、
+  非模式路径会被非等比压进 16×16。系统自带输入法下拉菜单里的「拼」「あ」是苹果私有素材（KeyboardLayouts.framework），
+  `TISIconLabels` 第三方写了不生效（鼠须管 #776 自 2023 挂着；goliajp/inputx、nvalleo/nagi 各自真机验过），别再试。
+  改图标后系统有缓存：`kill -9` TextInputMenuAgent / TextInputSwitcher，仍旧就注销。
+- 输入源注册（`app/input_source.rs`，`--register`）：pkg 的 postinstall 以 root 跑，而输入源是每个用户的设置，
+  所以 postinstall 切到登录用户来调它。两个坑决定了它的结构：刚换过 bundle 的头几秒系统还在重扫新包，这时启用的记录会被顶掉
+  （实测装完 3 秒内都这样），所以启用后隔一会儿要再确认一次；TIS 在进程内缓存输入源状态，本进程怎么重列表、跑 run loop
+  回读都是旧值，所以回读与切换放在子进程（`--finish-register`）里做。
 - IMK 无法通过 `cargo run` 验证：需要打包成 `.app`、装到 `~/Library/Input Methods/`、
   注销或重启输入法进程才会生效。Core 的验证靠 CLI 测试工具和单元测试，不依赖跑起真实输入法。
 - 已知需要单独处理的场景：Secure Input 字段、沙盒应用、Electron 与 Terminal 各自的 marked text 行为。
@@ -393,24 +406,43 @@ CC-CEDICT 表（`dict-convert cedict`）保留为备用来源，覆盖面广但�
   失焦 / 停用时 DLL 发 `Commit`，Server 回 `Committed { text }`（缓冲区原样交出，对应 macOS 的 `commitComposition`），
   DLL 用最近收键记下的 `ITfContext` 经编辑会话落进文档；应用强行终止组句（`OnCompositionTerminated`）时拼音已被框架定成普通文本，
   DLL 只记「Server 缓冲过期」，下次说话前先 `Commit` 并丢掉交出的文本，不再插一次。
-  中英模式：**Windows 与 macOS 机制不同**。macOS 用 Caps Lock 当中英切换键；Windows 按本地习惯，单击 Shift 在中 / 英间翻转。
-  单击 Shift 的判定在**击键 sink** 里（`com/key/shift.rs`，喂 `OnTestKeyDown` / `OnTestKeyUp`：按下 Shift 到抬起之间没有别的键插进来就是一次单击；
+  中英模式：**Windows 与 macOS 机制不同**。macOS 用 Caps Lock 当中英切换键；Windows 按本地习惯，单击切换键在中 / 英间翻转，
+  切换键由 `[shortcut] switch_mode` 定（`shift` 缺省 / `control` / `none` 不切换），`[general] english_mode` 关掉则整个内置英文模式停用（issue #81）。
+  单击判定在**击键 sink** 里（`com/key/tap.rs`，喂 `OnTestKeyDown` / `OnTestKeyUp`：按下切换键到抬起之间没有别的键插进来就是一次单击；
   微软 SampleIME 的 `OnTestKeyDown` 同样处理 VK_SHIFT，sink 收得到独立修饰键）。之前用线程级 `WH_KEYBOARD` 钩子判定，但钩子**看不到被 TSF 吃掉的键**
   （msctf 在队列层把它们改成 WM_NULL），Shift + 数字（删候选 / 第二译词）会被误判成单击而切换模式，2026-09-11 真机确认 sink 收得到 Shift 后钩子已删。
+  切换键、英文模式开关与「Shift 字母进组句」由 **Server 读配置、经协议下发**（`protocol::InputSettings`：`OpenSession` 的回包
+  `SessionOpened` 带一次，之后每拍 `SyncMode` 跟着走，值变了就地应用，**设置窗口改完约 320 ms 内生效**，不必切走再切回输入法）；
+  DLL 不读配置文件——它跑在每个应用进程里，AppContainer 里的商店应用连 `%APPDATA%` 都读不到。
+  切换键选 `ctrl+space` 时它是组合键、属系统键不经击键 sink，与翻译快捷键一样登记成 TSF 保留键
+  （`com/key/preserved.rs` 的 `GUID_SWITCH_MODE`）；但 Windows 缺省把「输入法/非输入法切换」
+  （`IME_CHOTKEY_IME_NONIME_TOGGLE`，注册表 `Hot Keys\00000010`）也绑在它上面，系统会先截走，而且系统那条路
+  会把转换模式翻成「非原生」、我们又按 compartment 同步成英文——两边各切一次互相抵消。所以注册前先读那个热键，
+  被占着就不登记自己的、把切换交给系统那条路（`service/mode.rs::sync_switch_preserved_key`）。
+  **四条切换入口**——单击切换键、语言栏按钮、悬浮状态条、任务栏转换模式 compartment——都汇到 `com/service/mode.rs::set_english_mode`，
+  内置英文模式关着时在那里一并拦住（Server 侧状态条点击按同一项拦，免得两边显示不一致），此时连语言栏的「中 / 英」按钮都不登记。
   「翻译选中文字」的快捷键（缺省 Ctrl+Alt+T）**登记成 TSF 保留键**（`com/key/preserved.rs`，`ITfKeystrokeMgr::PreserveKey` → `OnPreservedKey`）：
   带 Alt 的组合是系统键、不经击键 sink（真机 `OnTestKeyDown` 里从没出现过），保留键由 TSF 在应用之前匹配，UWP 里也一样；组合激活时从
   `config.toml` 读一次（AppContainer 读不到用户目录时用缺省），命中后当作那个组合键转发给 Server 走原有的 `RequestSelection` 流程。
   DLL 记 `english_mode` 持久状态；任务栏的中 / 英指示器靠 `GUID_LBI_INPUTMODE` 语言栏按钮渲染
-  （`com/mode/button.rs`，图标现画「中」/「英」，第三方 TIP 单写转换模式 compartment 不出这个指示器），另外顺带写一份转换模式 compartment
+  （`com/mode/button.rs`，图标是设计稿 SVG 预栅格化的四档 alpha 蒙版，`mode/icon.rs` 按系统 DPI 挑档、按任务栏 `SystemUsesLightTheme` 填黑或白，Caps Lock 亮着显示「A」；第三方 TIP 单写转换模式 compartment 不出这个指示器），另外顺带写一份转换模式 compartment
   （`GUID_COMPARTMENT_KEYBOARD_INPUTMODE_CONVERSION` 的 `TF_CONVERSIONMODE_NATIVE` 位，`com/mode/mod.rs`）。这条 compartment 还**反向同步**：激活时对它挂
   `ITfCompartmentEventSink`（`com/mode/conversion.rs`），用户点任务栏中 / 英（或别的输入指示器途径）改了转换模式时 `OnChange` 读回 `NATIVE` 位、与当前
-  `english_mode` 不同才翻转（相同即我们自己写的那次，忽略以防回环），翻转顺带走 `update_mode_indicator` → 悬浮状态条也一起同步；Caps Lock 只管大小写，
+  `english_mode` 不同才翻转（相同即我们自己写的那次，忽略以防回环），翻转顺带走 `update_mode_indicator` → 悬浮状态条也一起同步；
+  **激活后的最初一瞬除外**（`service/mode.rs` 的 `CONVERSION_RESTORE_GUARD`，约 1.2 s）：msctf 会在 TIP 激活后 200–300 ms 把 profile 存的
+  转换模式（缺省「非原生」= 关掉输入法）写回 compartment，采纳它会让每个应用一激活就是英文模式——表现是「Ctrl + Space 好像不能用」，
+  其实只是每次都被打回英文。Caps Lock 只管大小写，
   亮着无论中英模式都直接出大写英文（微软拼音式）。`KeyModifiers` 因此带 `caps`（大小写）与 `english_mode`（持久模式）两个非物理位，
   字母大小写按 `shift XOR caps`。Router（`dispatch/key/input.rs`）里 `english = caps || english_mode`、候选只在 `english_mode && !caps && 应用允许` 时给，
   `[general] english_candidates` 关着就是纯直通。macOS 的「先上屏、再把这个键交给应用」在 Windows 上会乱序
-  （放行是同步的、上屏走异步编辑会话），所以组句中的空格 / 标点 / Shift 大写字母改成吃掉，连同上屏文本一起插入；
+  （放行是同步的、上屏走异步编辑会话），所以组句中的空格 / 标点改成吃掉、连同上屏文本一起插入；Shift 大写字母交 [`Engine::push`] 进缓冲区
+  （Core 按小写匹配、原样上屏时还原大写，见 [`Composition`]），不再走「先上屏再放行」；
+  组句外没有全角映射的字符里，`-` `=` 也改由壳自己插入（`dispatch/key/input.rs::apply_punctuation`）：
+  放行要等宿主把键交回应用，实测在部分宿主（Edge / QQ 等）里这个键到不了，用户看到的是「按了没反应」；
+  其余（`@` 数字等）继续放行，宿主连不上 Server 时也只吃「可能是在打拼音」的字母（`service/key_sink.rs`），
+  免得断连窗口里标点 / 数字跟着一起没反应；
   `[apps] english_candidates_off` 按应用关闭：应用标识在 Windows 上是宿主进程的 exe 文件名（DLL 加载在应用进程里，`GetModuleFileNameW(NULL)`
-  取到就随 `OpenSession { app }` 报一次，Server 每会话记下，收键时按当前会话查），缺省名单分平台（`AppsConfig` 的两份常量与配置模板的 `[apps]` 一节都按 `cfg(windows)` 选），
+  取到就随 `OpenSession { app }` 报一次，Server 每会话记下，收键时按当前会话查），缺省名单分平台（`AppsConfig` 的三份常量与配置模板的 `[apps]` 一节按目标平台三选一：Windows 是 exe 文件名、macOS 是 bundle identifier、Linux 是 Fcitx5 认到的应用名，X11 下是 WM_CLASS、Wayland 下是 app_id），
   经典控制台的窗口属于 `conhost.exe`、Windows Terminal 是 `WindowsTerminal.exe`；
   `[shortcut]` 的修饰键 + 数字（译词上屏 / 删候选，`dispatch/key/shortcut.rs`）：配置里的 `Modifiers` 按 option→Alt、control→Ctrl、command→Win
   落到 `KeyModifiers`，Router 按键码认数字、去掉 Caps 位后与配置比；DLL 见 Ctrl / Alt / Win 仍一律放行，只有组句中的修饰键 + 数字送 Server 判，
@@ -429,14 +461,17 @@ CC-CEDICT 表（`dict-convert cedict`）保留为备用来源，覆盖面广但�
 - **悬浮状态条（Server 进程自绘，可拖动 / 记位置）**：桌面上常驻的小浮窗，显示当前中 / 英（开着双拼时附方案名），与任务栏的中 / 英指示器（语言栏按钮）并存。跟候选窗**同一条 UI 线程**、复用同一套分层窗口合成器（`server/src/ui/layered/`：圆角背景 + 四周柔和阴影，从候选窗的 `surface.rs` 抽出来两边共用）与主题（字体 / 配色 / DPI / 深浅）；自己一个窗口类与窗口过程（`server/src/ui/status/`）：三格 `[中 / 英][，。/ ,.][⚙]`：按下鼠标先 `DragDetect`，挪出阈值就交给系统移动循环（`WM_NCLBUTTONDOWN` + `HTCAPTION`，结束时 `WM_EXITSIZEMOVE` 报新位置），没挪就是点击、按 x 落进哪格；`WM_MOUSEACTIVATE` 回 `MA_NOACTIVATE` 点它不抢应用焦点；窗口过程按 HWND 从 thread_local 表查到对象。点格 / 拖动结束经 `StatusEvent`（`dispatch/status/`）投回工人线程（工人循环收的是 `ipc::Work`：DLL 消息或状态条事件），Router 写回配置（`[status_bar] x/y`、`[general] full_width_punctuation`，热加载再读回）；齿轮由 UI 线程直接起设置程序。中英模式只在 DLL 侧（单击 Shift 翻转），DLL 在切换 / 激活 / 获焦时用 `ClientMessage::ModeChanged { english }` 把当前会话的模式推来（`com/service/mode.rs::refresh_mode_indicator` 的单一咽喉点）；状态条上点「中 / 英」时 Server 只能记下目标模式（`pending_mode`）等 DLL 来取：DLL 的轮询定时器在没组句、本线程前台时每几拍发 `SyncMode`，`ModeSync { english: Some(_) }` 就切并回报 `ModeChanged`。状态条**常驻桌面**，只跟「当前输入法是不是青简」走：第一次 `ModeChanged` 显示，DLL 挂 `ITfActiveLanguageProfileNotifySink`（`com/profile.rs`）在别的 TIP 被激活时用一条临时连接发 `ImeSwitched` 收起（此时自己已被停用、会话连接已关），应用退出（`CloseSession`）不收。双拼方案 Server 从自己的 `[general] shuangpin` 配置知道，不必带。开关与记住的位置在 `[status_bar]`（`enabled` / `x` / `y`），热加载即时生效；uiAccess 高 z-band 与候选窗同进程天然继承。参考微软水杉的 FTB 形态（`~/Desktop/MSIME-Windows`，它用 D2D + DirectComposition 且不记位置），落地时选沿用本项目已有的 GDI 分层窗那套以保持视觉语言一致、并加了位置持久化。
 - **帧编解码**：长度前缀 JSON 帧的 `read_message` / `write_message` 与缺省管道名放在 `qingjian-platform::protocol`，Server 与 DLL 共用（DLL 不必依赖整个 Server 库）。
 - **TSF DLL**：`apps/windows/tsf`（package `qingjian-windows-tsf`，`cdylib`，产物 `qingjian_tsf.dll`，依赖官方 `windows` crate 的 COM `implement` 宏）。「引擎层」不是 Engine 而是连 Server 的**管道客户端** `EngineClient`（平台无关、可端到端测）；
+  连不上 Server 时 DLL 自己把它拉起来（`com/service/launch.rs`）：Server 只在登录时由「启动」文件夹的快捷方式拉起，中途挂了以前只能等下次登录、期间静默吞键。
+  用 `ShellExecuteW`（`uiAccess=true` 的 exe 用 `CreateProcess` 报 740），与 DLL 同目录的 `qingjian-server.exe`；
+  进程内 5 秒冷却 + 跨进程命名互斥体（`Local\QingjianServerLaunch`）保证多个应用同时发现 Server 不在时只起一个。
   COM 层：`DllGetClassObject` → `IClassFactory` → `#[implement(ITfTextInputProcessor, ITfKeyEventSink, ITfDisplayAttributeProvider)]` → `Activate` 挂击键 sink + 登记翻译保留键 + 语言栏中英按钮 + 连管道 → `OnKeyDown` 转发按键、经异步编辑会话（`TF_ES_READWRITE`，不带 SYNC）写组句 / 上屏；`DllRegisterServer` 写 InprocServer32 并经 `ITfInputProcessorProfiles` / `ITfCategoryMgr` 注册文本服务与各能力类别。
   组句拼音的**内联下划线**（对应 macOS marked text 下划线）走 TSF 显示属性协议（`com/display_attribute/`）：注册 `GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER` 类别 + 一个自定义显示属性 GUID（细实线、`TF_ATTR_INPUT`），
   `ITfDisplayAttributeProvider`（实现在 TextService 上）把 GUID 对应的 `TF_DISPLAYATTRIBUTE` 交给系统；收键写组句时用 `ITfCategoryMgr::RegisterGUID` 把 GUID 换成 atom，`SetValue` 进组句范围的 `GUID_PROP_ATTRIBUTE` 属性，宿主据此在拼音底下画线。
-  收键与运行细节记进 `%LOCALAPPDATA%\Qingjian\tsf.<日期>.log`（按天一个文件、留 7 天，与 Server 一致；多进程追加同一文件）；候选窗口不再由 DLL 自绘（已搬到 Server 进程，见上「候选窗口」），DLL 侧只做 preedit 内联 + 上报光标矩形；云联想已接。
+  收键与运行细节记进 `%LOCALAPPDATA%\Qingjian\logs\tsf.<日期>.log`（与 Server / 设置程序同目录，按天一个文件、留 7 天；多进程追加同一文件）；候选窗口不再由 DLL 自绘（已搬到 Server 进程，见上「候选窗口」），DLL 侧只做 preedit 内联 + 上报光标矩形；云联想已接。
 - **交叉编译验证**：`qingjian-core` / `-dictionary` / `-format` / `-lm` / `-platform` / `apps/windows/{server,tsf}` 已能
   `cargo check --target x86_64-pc-windows-gnu` 通过（借此修掉 `qingjian-format` 里 unix 专有的 `Mmap::advise` 未 `cfg` 的移植 bug）；
   本机只 `check`，真正编译在 Windows 机器上做（`qingjian-neural` 的 candle 后端在 Windows 走 CPU，已接进 Server，见下「本地整句模型」）。
-- **本地整句模型（Server 进程，与 macOS 的 `host/model.rs` 对齐）**：`server/src/dispatch/rescore/`。启动时 `find_model`（用户目录 `%APPDATA%\Qingjian\model\` 优先，否则随包 `data\model\`；`.qjm` 单文件或三件套目录）；`[model] enabled` 开着就起线程加载并预热（`ModelLoader`），下一次按键 / tick 接上 `set_async_sentence_scorer`。
+- **本地整句模型（Server 进程，与 macOS 的 `host/model/mod.rs` 对齐）**：`server/src/dispatch/rescore/`。启动时 `find_model`（用户目录 `%APPDATA%\Qingjian\model\` 优先，否则随包 `data\model\`；`.qjm` 单文件或三件套目录）；`[model] enabled` 开着就起线程加载并预热（`ModelLoader`），下一次按键 / tick 接上 `set_async_sentence_scorer`。
   Server 没有定时器：缓冲变化后 `schedule_rescoring` 起防抖，工人循环 `recv_timeout(router.next_tick())` 按 `RescoreState` 的节拍醒来（防抖 80 ms → `request_rescoring`；然后 20 ms 一次 `poll_rescoring`，最多等 2 s），DLL 组句期间每 80 ms 的 `Poll` 也顺带 `tick`。分到了重查一次、重建候选布局（云端词与整句补全留着）、由 Server 自绘的候选窗直接重画，DLL 下一次 `Poll` 拿到新帧更新内联 preedit；翻过页 / 动过高亮不动。热加载 `[model]` 变了才重载 / 卸载。
   前文：DLL 在**起组句的那次读写编辑会话**里顺手读选区起点前 64 个 UTF-16 单元（`com/edit/surrounding.rs::text_before_caret`，拼音还没插进去、不用再开一次会话），随 `ClientMessage::Surrounding` 单向送来。**密码框与私密输入**（2026-09-12 查了微软文档 / SampleIME / Chromium 源码后定）：
   TSF 规定键盘类 TIP 必须看上下文的 `GUID_COMPARTMENT_KEYBOARD_DISABLED`（微软文档明说密码框应禁用文本服务、`IS_PASSWORD` 只是标注不提供保护；Chromium 给密码框的上下文设的就是它），
@@ -446,7 +481,11 @@ CC-CEDICT 表（`dict-convert cedict`）保留为备用来源，覆盖面广但�
 - **版本与发布**：各平台壳版本号独立（见 `docs/notes/release.md`）；`apps/windows/server/Cargo.toml` 写死自己的 `version`，
   将来的发布标签用 `windows-v<版本>`，与 macOS 的 `macos-v<版本>` 互不影响（`qingjian-windows-tsf` 是同一 Windows 产品的另一半，各自 `Cargo.toml` 记版本；两个 package 同放 `apps/windows/` 下，是一个产品的两个产物——不合成一个 crate，因为 DLL 不能带 Engine 的依赖树）。
 
-### Linux：IBus / Fcitx
+### Linux：Fcitx5 / IBus（2026-09-15 定，PR #90 在做）
 
-- IBus 走 D-Bus（`zbus`），纯 Rust 即可。
-- Fcitx5 需要一层 C++ shim(Maybe)。
+- 与 Windows 同构：Core 跑在独立的 Rust Server 进程（Unix socket，复用 `qingjian-platform` 的协议），壳只转发按键、上屏与光标位置。
+  词库、语言模型、神经模型、渲染器和字体都在 Server 里，不进 Fcitx5 这个所有输入法共用的进程；Server 崩了不带倒 Fcitx5。
+- Fcitx5 壳是一层薄 C++ 插件（addon ABI 是 C++ 虚类，纯 Rust 做不了），只做转发，判断都在 Server。
+- 候选窗自绘：Server 出位图并自己开窗（X11 / XWayland 先行），插件只报光标矩形与焦点。
+- IBus 壳以后用 zbus 写成纯 Rust，共用同一个 Server；排在 Fcitx5 真机验收之后。
+- 三个平台的按键分流（macOS host / Windows Server / Linux Server）要抽成公共 crate，等 Linux 最小输入链路合入后做。

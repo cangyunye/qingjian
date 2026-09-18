@@ -80,7 +80,13 @@ fn serve_runs_the_open_type_loop_over_a_stream() {
     while let Some(message) = read_message::<_, ServerMessage>(&mut out).unwrap() {
         responses.push(message);
     }
-    assert_eq!(responses.len(), 5, "五个按键应各回一条 KeyResult");
+    // 开会话先回一条 `SessionOpened`（把按键行为设置带下来），之后五个按键各回一条 `KeyResult`。
+    assert_eq!(responses.len(), 6, "一条 SessionOpened 加五条 KeyResult");
+    assert!(
+        matches!(responses.first(), Some(ServerMessage::SessionOpened { .. })),
+        "首条应是 SessionOpened，实际：{:?}",
+        responses.first()
+    );
 
     let ServerMessage::KeyResult { frame, .. } = responses.last().unwrap() else {
         panic!("末条应是 KeyResult");

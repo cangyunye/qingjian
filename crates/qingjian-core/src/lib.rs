@@ -7,6 +7,7 @@
 pub mod candidate;
 pub mod composition;
 pub mod correction;
+pub mod custom_phrase;
 pub mod emoji;
 pub mod engine;
 pub mod english;
@@ -19,6 +20,9 @@ pub mod sentence;
 pub mod shortcut;
 pub mod shuangpin;
 pub mod storage;
+pub mod zhuyin;
+
+pub use custom_phrase::CustomPhrase;
 
 pub use candidate::{
     Candidate, CandidateKind, CandidateLayout, CandidateList, Cell, Language, PartOfSpeech, Sense,
@@ -28,13 +32,14 @@ pub use composition::Composition;
 pub use correction::Correction;
 pub use emoji::EmojiTable;
 pub use engine::{
-    AnnotationReport, BOOKS, Book, CloudWord, CommitEntry, Engine, FRESH_UNTIL, FilledGloss,
-    Forgotten, GlossFiller, INPUT_LOG_VERSION, InputLogEntry, InputLogger, InputSource, Learner,
-    LevelCount, MarkedKind, MarkedSegment, ModeKeys, NEURAL_MARGIN, NEURAL_WEIGHT, NoGlossFiller,
-    NoInputLogger, NoLearner, NoPredictor, NoTranslator, NoUsageMeter, NoVocabularyTracker,
-    Prediction, PredictionKind, PredictionPolicy, PredictionRequest, Predictor, QUESTION_PREFIX,
-    Query, RESCORE_CONTEXT_CHARS, SurroundingText, Timings, Translator, Usage, UsageMeter,
-    UsageSummary, VocabularySummary, VocabularyTracker, book_scale, translation_target,
+    AnnotationReport, BOOKS, Book, CloudWord, CommitEntry, Engine, EngineSession, FRESH_UNTIL,
+    FilledGloss, Forgotten, GlossFiller, INPUT_LOG_VERSION, InputLogEntry, InputLogger,
+    InputSource, Learner, LevelCount, MarkedKind, MarkedSegment, ModeKeys, NEURAL_MARGIN,
+    NEURAL_WEIGHT, NoGlossFiller, NoInputLogger, NoLearner, NoPredictor, NoTranslator,
+    NoUsageMeter, NoVocabularyTracker, Prediction, PredictionKind, PredictionPolicy,
+    PredictionRequest, Predictor, QUESTION_PREFIX, Query, RESCORE_CONTEXT_CHARS, SurroundingText,
+    Timings, Translator, Usage, UsageMeter, UsageSummary, VocabularySummary, VocabularyTracker,
+    book_scale, translation_target,
 };
 pub use fuzzy::FuzzyRules;
 pub use history::{InputHistory, last_sentence};
